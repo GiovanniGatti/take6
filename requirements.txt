@@ -1,0 +1,7 @@
+ray[rllib]==1.7.0
+azureml-core==1.35.0
+azureml-train-core==1.35.0
+mypy==0.910
+pytest-xdist==2.4.0
+tensorflow==2.4.3
+gym==0.21.0

@@ -1,0 +1,4 @@
+.amlignore
+logs/
+__pycache__/
+take6.egg-info/

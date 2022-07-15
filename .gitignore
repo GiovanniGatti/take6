@@ -1,0 +1,5 @@
+/.pytest_cache/
+/.idea
+/src/take6.egg-info/
+/deployment-conf.yaml
+__pycache__
