@@ -261,7 +261,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=7e-4, help='The learning rate')
 
     # miscellaneous
-    parser.add_argument('--stop', type=float, default=1.5, help='The policy entropy value which training stops')
+    parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
     parser.add_argument('--max-iterations', type=int, default=200, help='The maximum number of training iterations')
 
     # debugging
