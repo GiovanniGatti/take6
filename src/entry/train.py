@@ -4,16 +4,15 @@ import multiprocessing
 import pathlib
 import sys
 import tempfile
-from typing import Optional, Any
+from typing import Any
 
 import numpy as np
 import ray
 from azureml import core
-from ray import tune, rllib
+from ray import tune
 from ray.rllib import agents
 from ray.rllib.agents import callbacks
 from ray.rllib.agents.ppo import PPOTrainer
-from ray.rllib.evaluation import MultiAgentEpisode
 from ray.rllib.models import ModelCatalog
 from ray.rllib.policy.policy import PolicySpec
 from ray.rllib.utils.framework import try_import_tf
@@ -28,69 +27,57 @@ _, tf, _ = try_import_tf()
 
 class TrackingCallback(callbacks.DefaultCallbacks):
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._run = core.Run.get_context()
-
-    def on_episode_start(self, *,
-                         worker: rllib.RolloutWorker,
-                         base_env: rllib.BaseEnv,
-                         policies: Dict[rllib.utils.typing.PolicyID, rllib.Policy],
-                         episode: rllib.evaluation.episode.MultiAgentEpisode,
-                         env_index: Optional[int] = None,
-                         **kwargs: Dict[Any, Any]) -> None:
-        super().on_episode_start(
-            worker=worker, base_env=base_env, policies=policies, episode=episode, env_index=env_index, **kwargs)
-
     def on_train_result(self, *, trainer: agents.Trainer, result: Dict[Any, Any], **kwargs: Dict[Any, Any]) -> None:
+        _run = core.Run.get_context()
         # custom metrics
-        self._run.log(name='policy_reward_mean', value=result['policy_reward_mean']['learner'])
-        self._run.log(name='win_rate', value=result['win_rate'])
-        self._run.log(name='league_size', value=result['league_size'])
+        _run.log(name='policy_reward_mean', value=result['policy_reward_mean']['learner'])
+        _run.log(name='win_rate', value=result['win_rate'])
+        _run.log(name='league_size', value=result['league_size'])
 
         # learning stats
         learner = result['info']['learner']['learner']['learner_stats']
-        self._run.log(name='learner_stats/entropy', value=learner['entropy'])
-        self._run.log(name='learner_stats/entropy_coeff', value=learner['entropy_coeff'])
-        self._run.log(name='learner_stats/kl', value=learner['kl'])
-        self._run.log(name='learner_stats/cur_kl_coeff', value=learner['cur_kl_coeff'])
-        self._run.log(name='learner_stats/policy_loss', value=learner['policy_loss'])
-        self._run.log(name='learner_stats/vf_loss', value=learner['vf_loss'])
-        self._run.log(name='learner_stats/vf_explained_var', value=learner['vf_explained_var'])
-        self._run.log(name='learner_stats/total_loss', value=learner['total_loss'])
-        self._run.log(name='learner_stats/curr_lr', value=learner['cur_lr'])
+        _run.log(name='learner_stats/entropy', value=learner['entropy'])
+        _run.log(name='learner_stats/entropy_coeff', value=learner['entropy_coeff'])
+        _run.log(name='learner_stats/kl', value=learner['kl'])
+        _run.log(name='learner_stats/cur_kl_coeff', value=learner['cur_kl_coeff'])
+        _run.log(name='learner_stats/policy_loss', value=learner['policy_loss'])
+        _run.log(name='learner_stats/vf_loss', value=learner['vf_loss'])
+        _run.log(name='learner_stats/vf_explained_var', value=learner['vf_explained_var'])
+        _run.log(name='learner_stats/total_loss', value=learner['total_loss'])
+        _run.log(name='learner_stats/curr_lr', value=learner['cur_lr'])
 
         # perf
         perf = result['perf']
         sampler_perf = result['sampler_perf']
-        self._run.log(name='perf/mean_env_wait_ms', value=sampler_perf['mean_env_wait_ms'])
-        self._run.log(name='perf/mean_raw_obs_processing_ms', value=sampler_perf['mean_raw_obs_processing_ms'])
-        self._run.log(name='perf/mean_inference_ms', value=sampler_perf['mean_inference_ms'])
-        self._run.log(name='perf/mean_action_processing_ms', value=sampler_perf['mean_action_processing_ms'])
-        self._run.log(name='perf/cpu_util_percent', value=perf['cpu_util_percent'])
-        self._run.log(name='perf/ram_util_percent', value=perf['ram_util_percent'])
+        _run.log(name='perf/mean_env_wait_ms', value=sampler_perf['mean_env_wait_ms'])
+        _run.log(name='perf/mean_raw_obs_processing_ms', value=sampler_perf['mean_raw_obs_processing_ms'])
+        _run.log(name='perf/mean_inference_ms', value=sampler_perf['mean_inference_ms'])
+        _run.log(name='perf/mean_action_processing_ms', value=sampler_perf['mean_action_processing_ms'])
+        _run.log(name='perf/cpu_util_percent', value=perf['cpu_util_percent'])
+        _run.log(name='perf/ram_util_percent', value=perf['ram_util_percent'])
         if 'gpu_util_percent0' in perf:
-            self._run.log(name='perf/gpu_util_percent0', value=perf['gpu_util_percent0'])
-            self._run.log(name='perf/vram_util_percent0', value=perf['vram_util_percent0'])
+            _run.log(name='perf/gpu_util_percent0', value=perf['gpu_util_percent0'])
+            _run.log(name='perf/vram_util_percent0', value=perf['vram_util_percent0'])
 
         timers = result['timers']
-        self._run.log(name='timers/sample_time_ms', value=timers['sample_time_ms'])
-        self._run.log(name='timers/sample_throughput', value=timers['sample_throughput'])
-        self._run.log(name='timers/learn_time_ms', value=timers['learn_time_ms'])
-        self._run.log(name='timers/learn_throughput', value=timers['learn_throughput'])
-        self._run.log(name='timers/update_time_ms', value=timers['update_time_ms'])
+        _run.log(name='timers/sample_time_ms', value=timers['sample_time_ms'])
+        _run.log(name='timers/sample_throughput', value=timers['sample_throughput'])
+        _run.log(name='timers/learn_time_ms', value=timers['learn_time_ms'])
+        _run.log(name='timers/learn_throughput', value=timers['learn_throughput'])
+        _run.log(name='timers/update_time_ms', value=timers['update_time_ms'])
         if 'load_throughput' in timers:
-            self._run.log(name='timers/load_throughput', value=timers['load_throughput'])
-            self._run.log(name='timers/load_time_ms', value=timers['load_time_ms'])
+            _run.log(name='timers/load_throughput', value=timers['load_throughput'])
+            _run.log(name='timers/load_time_ms', value=timers['load_time_ms'])
 
         # progress
-        self._run.log(name='progress/timesteps_total', value=result['timesteps_total'])
-        self._run.log(name='progress/time_this_iter_s', value=result['time_this_iter_s'])
-        self._run.log(name='progress/time_total_s', value=result['time_total_s'])
-        self._run.log(name='progress/episodes_total', value=result["episodes_total"])
+        _run.log(name='progress/timesteps_total', value=result['timesteps_total'])
+        _run.log(name='progress/time_this_iter_s', value=result['time_this_iter_s'])
+        _run.log(name='progress/time_total_s', value=result['time_total_s'])
+        _run.log(name='progress/episodes_total', value=result["episodes_total"])
 
 
 class SelfPlayCallback(callbacks.DefaultCallbacks):
+
     def __init__(self, win_rate_threshold: float = .95):
         super().__init__()
         # 0=RandomPolicy, 1=1st main policy snapshot,
@@ -166,9 +153,6 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     ModelCatalog.register_custom_model('take6', model.Take6Model)
     tune.register_env('take6', env.take6)
 
-    def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
-        return 'learner' if agent_id == 0 else 'opponent'
-
     return tune.run(
         run_or_experiment=PPOTrainer,
         config={
@@ -201,7 +185,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                     # An initial random opponent to play against.
                     'opponent': PolicySpec(None, None, None, {}),
                 },
-                'policy_mapping_fn': policy_mapping_fn,
+                'policy_mapping_fn': lambda agent_id, **kwargs: 'learner' if agent_id == 0 else 'opponent',
                 'policies_to_train': ['learner'],
             },
 
