@@ -4,12 +4,12 @@ import multiprocessing
 import pathlib
 import sys
 import tempfile
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import ray
 from azureml import core
-from ray import tune
+from ray import tune, rllib
 from ray.rllib import agents
 from ray.rllib.agents import callbacks
 from ray.rllib.agents.ppo import PPOTrainer
@@ -80,21 +80,29 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
 
     def __init__(self, win_rate_threshold: float = .95):
         super().__init__()
-        # 0=RandomPolicy, 1=1st main policy snapshot,
-        # 2=2nd main policy snapshot, etc..
         self._win_rate_threshold = win_rate_threshold
         self.current_opponent = 0
 
+    def on_episode_end(self, *,
+                       worker: rllib.RolloutWorker,
+                       base_env: rllib.BaseEnv,
+                       policies: Dict[rllib.utils.typing.PolicyID, rllib.Policy],
+                       episode: rllib.evaluation.episode.MultiAgentEpisode,
+                       env_index: Optional[int] = None,
+                       **kwargs: Dict[Any, Any]) -> None:
+        super().on_episode_end(
+            worker=worker, base_env=base_env, policies=policies, episode=episode, env_index=env_index, **kwargs)
+        learner_score = episode.agent_rewards[0, 'learner']
+        for (_, t), score in episode.agent_rewards.items():
+            if t != 'learner':
+                if score >= learner_score:
+                    episode.custom_metrics['win'] = 0
+                    return
+        episode.custom_metrics['win'] = 1
+
     def on_train_result(self, result, **kwargs):
         trainer = kwargs['trainer']
-        main_rew = result['hist_stats'].pop('policy_learner_reward')
-        opponent_rew = list(result['hist_stats'].values())[0]
-        assert len(main_rew) == len(opponent_rew)
-        won = 0
-        for r_main, r_opponent in zip(main_rew, opponent_rew):
-            if r_main > r_opponent:
-                won += 1
-        win_rate = won / len(main_rew)
+        win_rate = result['custom_metrics']['win_mean']
         result['win_rate'] = win_rate
         if win_rate > self._win_rate_threshold:
             self.current_opponent += 1
