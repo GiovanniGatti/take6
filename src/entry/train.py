@@ -174,6 +174,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'framework': framework,
 
             'model': {
+                'fcnet_hiddens': [512, 512],
                 'custom_model': 'take6',
                 'fcnet_activation': 'relu',
             },
