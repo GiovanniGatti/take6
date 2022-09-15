@@ -4,15 +4,20 @@ import multiprocessing
 import pathlib
 import sys
 import tempfile
+from collections import defaultdict
 from typing import Any, Optional
 
 import numpy as np
 import ray
+import trueskill
 from azureml import core
 from ray import tune, rllib
 from ray.rllib import agents
 from ray.rllib.agents import callbacks
 from ray.rllib.agents.ppo import PPOTrainer
+from ray.rllib.algorithms import algorithm
+from ray.rllib.evaluation import worker_set
+from ray.rllib.evaluation.metrics import collect_episodes, summarize_episodes
 from ray.rllib.models import ModelCatalog
 from ray.rllib.policy.policy import PolicySpec
 from ray.rllib.utils.framework import try_import_tf
@@ -25,14 +30,26 @@ from take6.aztools import checkpoint
 _, tf, _ = try_import_tf()
 
 
+def win_probability(player_1, player_2):
+    delta_mu = player_1.mu - player_2.mu
+    sum_sigma = sum(r.sigma ** 2 for r in [player_1, player_2])
+    ts = trueskill.global_env()
+    denom = math.sqrt(2 * (ts.beta * ts.beta) + sum_sigma)
+    return ts.cdf(delta_mu / denom)
+
+
 class TrackingCallback(callbacks.DefaultCallbacks):
 
-    def on_train_result(self, *, trainer: agents.Trainer, result: Dict[Any, Any], **kwargs: Dict[Any, Any]) -> None:
+    def on_train_result(self, *,
+                        _algorithm: Optional['Algorithm'] = None,
+                        result: Dict[Any, Any],
+                        trainer: agents.Trainer,
+                        **kwargs: Dict[Any, Any]) -> None:
         _run = core.Run.get_context()
         # custom metrics
-        _run.log(name='policy_reward_mean', value=result['policy_reward_mean']['learner'])
-        _run.log(name='win_rate', value=result['win_rate'])
-        _run.log(name='league_size', value=result['league_size'])
+        _run.log(name='training/win_rate', value=result['win_rate'])
+        _run.log(name='training/policy_reward_mean', value=result['policy_reward_mean']['learner'])
+        _run.log(name='training/league_size', value=result['league_size'])
 
         # learning stats
         learner = result['info']['learner']['learner']['learner_stats']
@@ -60,14 +77,11 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _run.log(name='perf/vram_util_percent0', value=perf['vram_util_percent0'])
 
         timers = result['timers']
-        _run.log(name='timers/sample_time_ms', value=timers['sample_time_ms'])
-        _run.log(name='timers/sample_throughput', value=timers['sample_throughput'])
+        _run.log(name='timers/training_iteration_time_ms', value=timers['training_iteration_time_ms'])
         _run.log(name='timers/learn_time_ms', value=timers['learn_time_ms'])
         _run.log(name='timers/learn_throughput', value=timers['learn_throughput'])
-        _run.log(name='timers/update_time_ms', value=timers['update_time_ms'])
-        if 'load_throughput' in timers:
-            _run.log(name='timers/load_throughput', value=timers['load_throughput'])
-            _run.log(name='timers/load_time_ms', value=timers['load_time_ms'])
+        if 'synch_weights_time_ms' in timers:
+            _run.log(name='timers/synch_weights_time_ms', value=timers['synch_weights_time_ms'])
 
         # progress
         _run.log(name='progress/timesteps_total', value=result['timesteps_total'])
@@ -75,13 +89,27 @@ class TrackingCallback(callbacks.DefaultCallbacks):
         _run.log(name='progress/time_total_s', value=result['time_total_s'])
         _run.log(name='progress/episodes_total', value=result["episodes_total"])
 
+        if 'evaluation' in result and 'custom_metrics' in result['evaluation']:
+            _run.log(name='eval/policy_reward_mean', value=result['evaluation']['policy_reward_mean']['learner'])
+            _run.log(name='eval/win_rate', value=result['evaluation']['custom_metrics']['eval_win_rate'])
+
+            ratings = result['evaluation']['custom_metrics']['trueskill']
+            _learner = ratings['learner']
+            _opponent_v0 = ratings['opponent_v0']
+            _run.log(name='eval/mu', value=_learner.mu)
+            _run.log(name='eval/sigma', value=_learner.sigma)
+            _run.log(name='eval/quality', value=trueskill.quality_1vs1(_learner, _opponent_v0))
+            _run.log(name='eval/win_probability', value=win_probability(_learner, _opponent_v0))
+            _run.log(name='eval/opponent_v0_mu', value=_opponent_v0.mu)
+            _run.log(name='eval/opponent_v0_sigma', value=_opponent_v0.sigma)
+
 
 class SelfPlayCallback(callbacks.DefaultCallbacks):
 
-    def __init__(self, win_rate_threshold: float = .95):
+    def __init__(self):
         super().__init__()
-        self._win_rate_threshold = win_rate_threshold
-        self.current_opponent = 0
+        self.current_opponent = 3
+        self._training_step = 0
 
     def on_episode_end(self, *,
                        worker: rllib.RolloutWorker,
@@ -104,18 +132,29 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         trainer = kwargs['trainer']
         win_rate = result['custom_metrics']['win_mean']
         result['win_rate'] = win_rate
-        if win_rate > self._win_rate_threshold:
-            self.current_opponent += 1
+
+        if self._training_step > 0 and self._training_step % 25 == 0 and False:
             new_pol_id = f'opponent_v{self.current_opponent}'
 
             def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
                 if agent_id == 0:
+                    # I haven't found anyway to know which policies were
+                    # already selected between two calls of this function.
+                    # The workaround I found was to store this temporary
+                    # information in the user_data section of the episode.
+                    episode.user_data['selected_policies_id'] = []
                     return 'learner'
 
-                weights = np.arange(self.current_opponent)[::-1]
+                already_selected_ids = np.array(episode.user_data['selected_policies_id'], dtype=int)
+
+                weights = np.arange(self.current_opponent + 1)[::-1] / 2
+                weights[already_selected_ids] = np.inf
                 weights = np.exp(-weights) / np.sum(np.exp(-weights))
-                return 'opponent_v{}'.format(
-                    np.random.choice(list(range(1, self.current_opponent + 1)), p=weights))
+                _id = np.random.choice(list(range(self.current_opponent + 1)), p=weights)
+
+                episode.user_data['selected_policies_id'].append(_id)
+
+                return 'opponent_v{}'.format(_id)
 
             new_policy = trainer.add_policy(
                 policy_id=new_pol_id,
@@ -127,22 +166,96 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
             new_policy.set_state(main_state)
             trainer.workers.sync_weights()
 
-        result['league_size'] = self.current_opponent + 2
+            self.current_opponent += 1
+
+        result['league_size'] = self.current_opponent
+        self._training_step += 1
+
+
+class Evaluation:
+
+    def __init__(self):
+        self._ratings = defaultdict(lambda: trueskill.Rating())
+
+    def __call__(self, _algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet):
+        def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
+            if agent_id == 0:
+                episode.user_data['selected_policies_id'] = []
+                return 'learner'
+            already_selected_ids = np.array(episode.user_data['selected_policies_id'], dtype=int)
+            num_policies = len(worker.policy_map) - 1
+            choices = np.arange(num_policies)
+            select = np.ones_like(choices, dtype=bool)
+            select[already_selected_ids] = False
+            choices = choices[select]
+            _id = np.random.choice(choices)
+            episode.user_data['selected_policies_id'].append(_id)
+            return 'opponent_v{}'.format(_id)
+
+        eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
+
+        assert _algorithm.config['evaluation_duration_unit'] == 'episodes'
+        num_episodes = _algorithm.config['evaluation_duration']
+        num_workers = len(eval_workers.remote_workers())
+
+        try:
+            for i in range(max(1, round(num_episodes / num_workers))):
+                ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
+        except AssertionError or StopIteration:
+            _, new_workers = eval_workers.recreate_failed_workers(eval_workers.local_worker())
+            eval_workers.reset(new_workers)
+            return self(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
+
+        episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
+
+        for episode in episodes:
+            ratings = []
+            scores = []
+            players = []
+
+            for (_, t), score in episode.agent_rewards.items():
+                ratings.append((self._ratings[t],))
+                scores.append(score)
+                players.append(t)
+
+            classification = np.zeros(len(ratings))
+            classification[np.argsort(scores)] = np.arange(4)[::-1]
+            s, c = np.unique(scores, return_counts=True)
+            for _s in s[c > 1]:  # handle ties
+                classification[scores == _s] = np.min(classification[scores == _s])
+            new_ratings = trueskill.rate(ratings, ranks=list(classification))
+
+            episode.custom_metrics['win'] = classification[0] == 0
+
+            assert np.unique(players).shape[0] == 4, 'Repeated versions of a policy are playing within the same match'
+
+            for i, p in enumerate(players):
+                (self._ratings[p],) = new_ratings[i]
+
+        metrics = summarize_episodes(episodes, keep_custom_metrics=True)
+
+        custom_metrics = metrics['custom_metrics']
+        custom_metrics['trueskill'] = self._ratings
+        custom_metrics['eval_win_rate'] = np.mean(custom_metrics['win'])
+
+        return metrics
 
 
 def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.ExperimentAnalysis:
     num_gpus = len(tf.config.list_physical_devices('GPU'))
     num_cpus = multiprocessing.cpu_count()
+    eval_workers = 2
 
     if _namespace.debugging:
         num_workers = 1
         num_envs_per_worker = 1
         sgd_minibatch_size = 10
         num_sgd_iter = 2
+        eval_workers = 1
         framework = 'tf2'
         local_dir = str(pathlib.Path(_tmp_dir, 'ray-results'))
     else:
-        num_workers = num_cpus - 1
+        num_workers = num_cpus - eval_workers - 1
         num_envs_per_worker = int(math.ceil(_namespace.batch_size / (num_workers * 10)))
         sgd_minibatch_size = _namespace.minibatch_size
         num_sgd_iter = _namespace.num_sgd_iter
@@ -160,6 +273,12 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
 
     ModelCatalog.register_custom_model('take6', model.Take6Model)
     tune.register_env('take6', env.take6)
+
+    eval_method = Evaluation()
+
+    def warmup_agent_mapping(agent_id, **kwargs):
+        return 'learner' if agent_id == 0 else \
+            'opponent_v{}'.format(agent_id - 1)
 
     return tune.run(
         run_or_experiment=PPOTrainer,
@@ -190,11 +309,13 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'multiagent': {
                 'policies': {
                     # Our main policy, we'd like to optimize.
-                    'learner': PolicySpec(None, None, None, {}),
-                    # An initial random opponent to play against.
-                    'opponent': PolicySpec(None, None, None, {}),
+                    'learner': PolicySpec(None, None, None, None),
+                    # An initial random opponents to play against.
+                    'opponent_v0': PolicySpec(None, None, None, {}),
+                    'opponent_v1': PolicySpec(None, None, None, {}),
+                    'opponent_v2': PolicySpec(None, None, None, {}),
                 },
-                'policy_mapping_fn': lambda agent_id, **kwargs: 'learner' if agent_id == 0 else 'opponent',
+                'policy_mapping_fn': warmup_agent_mapping,
                 'policies_to_train': ['learner'],
             },
 
@@ -221,7 +342,11 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'vf_clip_param': 10.,
 
             # Policy evaluation config
-            'evaluation_interval': 0,
+            'evaluation_interval': 1,
+            'custom_eval_function': lambda alg, workers: eval_method(alg, workers),
+            'evaluation_num_workers': eval_workers,
+            'evaluation_duration': 2 if _namespace.debugging else 1024,
+            'evaluation_duration_unit': 'episodes',
 
             'callbacks': callbacks.MultiCallbacks([SelfPlayCallback, TrackingCallback]),
         },

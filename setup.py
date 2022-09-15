@@ -14,5 +14,6 @@ setup(name='take6',
       package_dir={'': 'src'},
       packages=['take6'],
       package_data={'take6': ['py.typed']},
-      install_requires=['azureml-core==1.35.0', 'azureml-train-core==1.35.0', 'ray[rllib]==1.7.0', 'gym==0.21.0'],
+      install_requires=['azureml-core==1.35.0', 'azureml-train-core==1.35.0', 'ray[rllib]==2.0.0', 'gym==0.21.0',
+                        'trueskill==0.4.5'],
       python_requires='>=3.7')

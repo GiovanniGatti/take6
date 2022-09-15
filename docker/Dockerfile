@@ -21,8 +21,9 @@ ENV PATH $PYTHON_ENV/bin:$PATH
 
 RUN python -m pip install --no-cache-dir \
     azureml-core==1.35.0 \
-    ray[rllib]==1.7.0 \
+    ray[rllib]==2.0.0 \
     statsmodels==0.13.0 \
     openpyxl==3.0.9 \
     tensorflow==2.4.3 \
-    gym==0.21.0
+    gym==0.21.0 \
+    trueskill==0.4.5
