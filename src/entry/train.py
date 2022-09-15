@@ -202,7 +202,7 @@ class Evaluation:
             for i in range(max(1, round(num_episodes / num_workers))):
                 ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
         except AssertionError or StopIteration:
-            _, new_workers = eval_workers.recreate_failed_workers(eval_workers.local_worker())
+            _, new_workers = eval_workers.recreate_failed_workers(_algorithm.workers.local_worker())
             eval_workers.reset(new_workers)
             return self(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
 
