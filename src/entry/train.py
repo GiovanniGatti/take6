@@ -274,24 +274,5 @@ if __name__ == '__main__':
 
     tmp_dir = tempfile.mkdtemp()
     analysis = main(namespace, tmp_dir)
-    while True:
-        # Re-launch trial when 'Assert agent_key not in self.agent_collectors' is bug fixed
-        # We can safely remove it when https://github.com/ray-project/ray/issues/15297 is closed.
-        relaunch = False
-        incomplete_trials = []
-        for trial in analysis.trials:
-            if trial.status == experiment_analysis.Trial.ERROR:
-                if 'assert agent_key not in self.agent_collectors' in trial.error_msg:
-                    relaunch = True
-                else:
-                    incomplete_trials.append(trial)
-
-        if incomplete_trials:
-            raise tune.TuneError("Trials did not complete", incomplete_trials)
-
-        if relaunch:
-            analysis = main(namespace, tmp_dir)
-            continue
-        break
 
     sys.exit(0)
