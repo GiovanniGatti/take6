@@ -3,3 +3,4 @@
 /src/take6.egg-info/
 /deployment-conf.yaml
 __pycache__
+/hyperparameter-search/param-search.yaml
