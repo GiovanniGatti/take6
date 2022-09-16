@@ -140,6 +140,7 @@ class Deck:
         return stacks, [Hand(hands[i]) for i in range(num_players)]
 
 
+# noinspection PyMissingConstructor
 class Take6(env.MultiAgentEnv):
 
     def __init__(self, table: Table, deck: Deck) -> None:
