@@ -367,20 +367,20 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', type=int, help='The checkpoint number to start the training from')
 
     # hyper-parameters
-    parser.add_argument('--minibatch-size', type=int, default=512, help='The sgd minibatch size')
-    parser.add_argument('--batch-size', type=int, default=5120, help='The sgd minibatch size')
-    parser.add_argument('--num-sgd-iter', type=int, default=8, help='The number of sgd iterations per training step')
-    parser.add_argument('--entropy-coeff', type=float, default=1e-4,
+    parser.add_argument('--minibatch-size', type=int, default=2048, help='The sgd minibatch size')
+    parser.add_argument('--batch-size', type=int, default=102_400, help='The sgd minibatch size')
+    parser.add_argument('--num-sgd-iter', type=int, default=32, help='The number of sgd iterations per training step')
+    parser.add_argument('--entropy-coeff', type=float, default=1.5e-3,
                         help='The weight to the entropy coefficient in the loss function')
-    parser.add_argument('--gamma', type=float, default=.9995, help='The discount rate')
-    parser.add_argument('--lambda', type=float, default=.98, help='The eligibility trace')
+    parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
+    parser.add_argument('--lambda', type=float, default=.9, help='The eligibility trace')
     parser.add_argument('--vf-loss-coeff', type=float, default=1.,
                         help='The value loss coefficient (optimize it if actor and critic share layers)')
-    parser.add_argument('--lr', type=float, default=7e-4, help='The learning rate')
+    parser.add_argument('--lr', type=float, default=6e-6, help='The learning rate')
 
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
-    parser.add_argument('--max-iterations', type=int, default=200, help='The maximum number of training iterations')
+    parser.add_argument('--max-iterations', type=int, default=170, help='The maximum number of training iterations')
 
     # debugging
     parser.add_argument('--debugging', action='store_true', help='Run locally with simplified settings')
