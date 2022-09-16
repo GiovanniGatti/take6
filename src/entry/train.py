@@ -24,7 +24,7 @@ from ray.rllib.utils.framework import try_import_tf
 from ray.rllib.utils.typing import Dict
 from ray.tune.analysis import experiment_analysis
 
-from take6 import env, model
+from take6 import env, model, policy
 from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
@@ -311,9 +311,9 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                     # Our main policy, we'd like to optimize.
                     'learner': PolicySpec(None, None, None, None),
                     # An initial random opponents to play against.
-                    'opponent_v0': PolicySpec(None, None, None, {}),
-                    'opponent_v1': PolicySpec(None, None, None, {}),
-                    'opponent_v2': PolicySpec(None, None, None, {}),
+                    'opponent_v0': PolicySpec(policy.RandomPolicy, None, None, {}),
+                    'opponent_v1': PolicySpec(policy.RandomPolicy, None, None, {}),
+                    'opponent_v2': PolicySpec(policy.RandomPolicy, None, None, {}),
                 },
                 'policy_mapping_fn': warmup_agent_mapping,
                 'policies_to_train': ['learner'],
