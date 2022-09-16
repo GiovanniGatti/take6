@@ -148,8 +148,6 @@ class Take6(env.MultiAgentEnv):
             {'action_mask': spaces.MultiBinary(10),
              'real_obs': spaces.Tuple((Hand.enc_space(), Table.enc_space()))})
 
-        super().__init__()
-
         self._table = table
         self._deck = deck
         self._hands: List[Hand] = []
