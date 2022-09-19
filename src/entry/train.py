@@ -48,6 +48,9 @@ class TrackingCallback(callbacks.DefaultCallbacks):
         _run = core.Run.get_context()
         # custom metrics
         _run.log(name='training/win_rate', value=result['win_rate'])
+        _run.log(name='training/score_rate', value=result['score_rate'])
+        _run.log(name='eval/relative_score', value=result['relative_score'])
+        _run.log(name='eval/weighted_classification', value=result['weighted_classification'])
         _run.log(name='training/policy_reward_mean', value=result['policy_reward_mean']['learner'])
         _run.log(name='training/league_size', value=result['league_size'])
 
@@ -91,6 +94,10 @@ class TrackingCallback(callbacks.DefaultCallbacks):
 
         if 'evaluation' in result and 'custom_metrics' in result['evaluation']:
             _run.log(name='eval/policy_reward_mean', value=result['evaluation']['policy_reward_mean']['learner'])
+            _run.log(name='eval/score_rate', value=result['evaluation']['custom_metrics']['eval_score_rate'])
+            _run.log(name='eval/relative_score', value=result['evaluation']['custom_metrics']['relative_score'])
+            _run.log(name='eval/weighted_classification',
+                     value=result['evaluation']['custom_metrics']['weighted_classification'])
             _run.log(name='eval/win_rate', value=result['evaluation']['custom_metrics']['eval_win_rate'])
 
             ratings = result['evaluation']['custom_metrics']['trueskill']
@@ -120,18 +127,27 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
                        **kwargs: Dict[Any, Any]) -> None:
         super().on_episode_end(
             worker=worker, base_env=base_env, policies=policies, episode=episode, env_index=env_index, **kwargs)
-        learner_score = episode.agent_rewards[0, 'learner']
-        for (_, t), score in episode.agent_rewards.items():
-            if t != 'learner':
-                if score >= learner_score:
-                    episode.custom_metrics['win'] = 0
-                    return
-        episode.custom_metrics['win'] = 1
+        scores = []
+        for _id in sorted(k[0] for k in episode.agent_rewards.keys()):
+            scores.append(episode.last_info_for(_id)['score'])
+
+        classification = np.zeros(len(scores), dtype=np.int)
+        classification[np.argsort(scores)] = np.arange(4)[::-1]
+        s, c = np.unique(scores, return_counts=True)
+        for _s in s[c > 1]:  # handle ties
+            classification[scores == _s] = np.min(classification[scores == _s])
+
+        episode.custom_metrics['win'] = 1 if np.argmax(scores) == 0 else 0
+        episode.custom_metrics['score'] = scores[0]
+        episode.custom_metrics['relative_score'] = scores[0] / np.sum(scores)
+        episode.custom_metrics['weighted_classification'] = -np.arange(len(scores))[classification[0]]
 
     def on_train_result(self, result, **kwargs):
         trainer = kwargs['trainer']
-        win_rate = result['custom_metrics']['win_mean']
-        result['win_rate'] = win_rate
+        result['win_rate'] = result['custom_metrics']['win_mean']
+        result['score_rate'] = result['custom_metrics']['score_mean']
+        result['relative_score'] = result['custom_metrics']['relative_score_mean']
+        result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
         if self._training_step > 0 and self._training_step % 25 == 0 and False:
             new_pol_id = f'opponent_v{self.current_opponent}'
@@ -237,6 +253,7 @@ class Evaluation:
         custom_metrics = metrics['custom_metrics']
         custom_metrics['trueskill'] = self._ratings
         custom_metrics['eval_win_rate'] = np.mean(custom_metrics['win'])
+        custom_metrics['eval_score_rate'] = np.mean(custom_metrics['score'])
 
         return metrics
 

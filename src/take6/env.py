@@ -172,7 +172,7 @@ class Take6(env.MultiAgentEnv):
         rwd = {i: round_scores[i] for i in range(self._table.num_players)}
         done = {i: _done for i in range(self._table.num_players)}
         done['__all__'] = _done
-        return obs, rwd, done, {}
+        return obs, rwd, done, {i: {'score': self._current_scores[i]} for i in range(self._table.num_players)}
 
     def reset(self) -> MultiAgentDict:
         stacks, self._hands = self._deck.distribute(self._table.num_players)
