@@ -154,6 +154,8 @@ class Take6(env.MultiAgentEnv):
         self._hands: List[Hand] = []
         self._history = np.zeros(104, dtype=int)
 
+        self._current_scores = np.zeros(table.num_players)
+
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
         played_cards = np.array([self._hands[i].select(a) for i, a in action_dict.items()])
@@ -165,6 +167,8 @@ class Take6(env.MultiAgentEnv):
 
         round_scores = self._table.play(played_cards)
         _done = self._table.turn >= 10
+
+        self._current_scores += round_scores
 
         table_enc = self._table.encode()
         obs = {i: {'action_mask': self._hands[i].mask(), 'real_obs': (self._hands[i].encode(), table_enc)}
