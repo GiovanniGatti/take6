@@ -308,6 +308,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                 'num-players': 4,
                 'rwd-fn': _namespace.rwd_fn,
                 'with-scores': _namespace.with_scores,
+                'with-history': _namespace.with_history,
             },
             'num_workers': num_workers,
             'num_cpus_per_worker': 1,
@@ -404,6 +405,7 @@ if __name__ == '__main__':
                         choices=['raw-score', 'proportional-score', 'classification'],
                         help='The reward signal to use')
     parser.add_argument('--with-scores', action='store_true', help='Add scores to agent\'s observations')
+    parser.add_argument('--with-history', action='store_true', help='Add scores to agent\'s observations')
 
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')

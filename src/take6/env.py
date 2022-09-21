@@ -315,16 +315,58 @@ class ScoreWrapper(env.MultiAgentEnv):
         pass
 
 
+# noinspection PyMissingConstructor
+class PlayedCardsWrapper(env.MultiAgentEnv):
+
+    def __init__(self, _env: env.MultiAgentEnv, table: Table):
+        assert isinstance(_env.observation_space, spaces.Dict), 'Original environment must have a Dict obs. space'
+        assert 'real_obs' in _env.observation_space.keys(), 'Original environment must have an real_obs space'
+
+        self.observation_space = _env.observation_space
+        self.action_space = _env.action_space
+        self._env = _env
+        self._table = table
+
+        self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'],
+                                                           spaces.Box(low=0, high=1, shape=(104,))))
+
+        self._history = np.zeros(104, dtype=np.float32)
+
+    def step(
+            self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
+        obs, rwd, done, info = self._env.step(action_dict)
+        self._history[self._table.rows.flatten() - 1] = 1
+        for _obs in obs.values():
+            _obs['real_obs'] = (*_obs['real_obs'], self._history)
+        return obs, rwd, done, info
+
+    def reset(self) -> MultiAgentDict:
+        obs = self._env.reset()
+        self._history[:] = 0
+        self._history[self._table.rows.flatten() - 1] = 1
+        for _obs in obs.values():
+            _obs['real_obs'] = (*_obs['real_obs'], self._history)
+        return obs
+
+    def render(self, mode=None) -> None:
+        pass
+
+
 def take6(config: Dict[str, Any]) -> gym.Env:
     num_players = config['num-players']
     scoreboard = Scoreboard(num_players)
-    _env = Take6(Table(num_players), Deck(), scoreboard)
+    table = Table(num_players)
+
+    _env = Take6(table, Deck(), scoreboard)
 
     rwd_fn = config['rwd-fn']
     if rwd_fn == 'proportional-score':
         _env = ProportionalRwd(_env, scoreboard, num_players)
     elif rwd_fn == 'classification':
         _env = ClassificationRwd(_env, scoreboard, num_players)
+
+    if config['with-history']:
+        _env = PlayedCardsWrapper(_env, table)
 
     if config['with-scores']:
         _env = ScoreWrapper(_env, scoreboard)
