@@ -140,10 +140,35 @@ class Deck:
         return stacks, [Hand(hands[i]) for i in range(num_players)]
 
 
+class Scoreboard:
+
+    def __init__(self, num_players: int):
+        self._num_players = num_players
+        self._scores = np.zeros(self._num_players, dtype=np.float32)
+        self._min_score = -66.
+
+    @property
+    def scores(self) -> np.ndarray:
+        return self._scores
+
+    def enc_space(self) -> spaces.Space:
+        return spaces.Box(low=0, high=1, shape=(self._num_players,))
+
+    def encode(self) -> np.ndarray:
+        return np.minimum(1., self._scores / self._min_score)
+
+    def __add__(self, round_scores: np.ndarray) -> 'Scoreboard':
+        self._scores += round_scores
+        return self
+
+    def reset(self) -> None:
+        self._scores = np.zeros_like(self._scores)
+
+
 # noinspection PyMissingConstructor
 class Take6(env.MultiAgentEnv):
 
-    def __init__(self, table: Table, deck: Deck) -> None:
+    def __init__(self, table: Table, deck: Deck, scoreboard: Scoreboard) -> None:
         self.action_space = spaces.Discrete(10)
         self.observation_space = spaces.Dict(
             {'action_mask': spaces.MultiBinary(10),
@@ -154,7 +179,7 @@ class Take6(env.MultiAgentEnv):
         self._hands: List[Hand] = []
         self._history = np.zeros(104, dtype=int)
 
-        self._current_scores = np.zeros(table.num_players)
+        self._scoreboard = scoreboard
 
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
@@ -168,7 +193,7 @@ class Take6(env.MultiAgentEnv):
         round_scores = self._table.play(played_cards)
         _done = self._table.turn >= 10
 
-        self._current_scores += round_scores
+        self._scoreboard += round_scores
 
         table_enc = self._table.encode()
         obs = {i: {'action_mask': self._hands[i].mask(), 'real_obs': (self._hands[i].encode(), table_enc)}
@@ -176,7 +201,7 @@ class Take6(env.MultiAgentEnv):
         rwd = {i: round_scores[i] for i in range(self._table.num_players)}
         done = {i: _done for i in range(self._table.num_players)}
         done['__all__'] = _done
-        return obs, rwd, done, {i: {'score': self._current_scores[i]} for i in range(self._table.num_players)}
+        return obs, rwd, done, {i: {'score': self._scoreboard.scores[i]} for i in range(self._table.num_players)}
 
     def reset(self) -> MultiAgentDict:
         stacks, self._hands = self._deck.distribute(self._table.num_players)
@@ -184,12 +209,124 @@ class Take6(env.MultiAgentEnv):
         self._history[stacks - 1] += 1
         self._table.reset(stacks)
         table_enc = self._table.encode()
-        return {i: {'action_mask': self._hands[i].mask(), 'real_obs': (self._hands[i].encode(), table_enc)}
-                for i in range(self._table.num_players)}
+        self._scoreboard.reset()
+        return {i: {'action_mask': self._hands[i].mask(),
+                    'real_obs': (self._hands[i].encode(), table_enc)} for i in range(self._table.num_players)}
+
+    def render(self, mode=None) -> None:
+        pass
+
+
+# noinspection PyMissingConstructor
+class ClassificationRwd(env.MultiAgentEnv):
+
+    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, num_players: int):
+        self._env = _env
+        self._num_players = num_players
+        self._scoreboard = scoreboard
+        self.observation_space = _env.observation_space
+        self.action_space = _env.action_space
+
+    def step(
+            self, action_dict: MultiAgentDict
+    ) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
+        obs, _, done, info = self._env.step(action_dict)
+
+        if done[0]:
+            scores = self._scoreboard.scores
+            classification = np.zeros(scores.shape[0], dtype=np.int)
+            classification[np.argsort(scores)] = np.arange(4)[::-1]
+            s, c = np.unique(scores, return_counts=True)
+            for _s in s[c > 1]:  # handle ties
+                classification[scores == _s] = np.min(classification[scores == _s])
+            rwd = {i: -classification[i] for i in range(self._num_players)}
+        else:
+            rwd = {i: 0 for i in range(self._num_players)}
+
+        return obs, rwd, done, info
+
+    def reset(self) -> MultiAgentDict:
+        return self._env.reset()
+
+    def render(self, mode=None) -> None:
+        pass
+
+
+# noinspection PyMissingConstructor
+class ProportionalRwd(env.MultiAgentEnv):
+
+    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, num_players: int):
+        self._env = _env
+        self._num_players = num_players
+        self._scoreboard = scoreboard
+        self.observation_space = _env.observation_space
+        self.action_space = _env.action_space
+
+    def step(
+            self, action_dict: MultiAgentDict
+    ) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
+        obs, rwd, done, info = self._env.step(action_dict)
+
+        if done[0]:
+            scores = self._scoreboard.scores
+            new_rwd = {i: -scores[i] / np.sum(scores) for i in range(self._num_players)}
+        else:
+            new_rwd = {i: 0. for i in range(self._num_players)}
+
+        return obs, new_rwd, done, info
+
+    def reset(self) -> MultiAgentDict:
+        return self._env.reset()
+
+    def render(self, mode=None) -> None:
+        pass
+
+
+# noinspection PyMissingConstructor
+class ScoreWrapper(env.MultiAgentEnv):
+
+    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard):
+        assert isinstance(_env.observation_space, spaces.Dict), 'Original environment must have a Dict obs. space'
+        assert 'real_obs' in _env.observation_space.keys(), 'Original environment must have an real_obs space'
+
+        self._env = _env
+        self._scoreboard = scoreboard
+        self.action_space = _env.action_space
+        self.observation_space = _env.observation_space
+
+        self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'], scoreboard.enc_space()))
+
+    def step(
+            self, action_dict: MultiAgentDict
+    ) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
+        obs, rwd, done, info = self._env.step(action_dict)
+        return self.observation(obs), rwd, done, info
+
+    def reset(self) -> MultiAgentDict:
+        return self.observation(self._env.reset())
+
+    def observation(self, obs: MultiAgentDict) -> MultiAgentDict:
+        enc_score = self._scoreboard.encode()
+        for _obs in obs.values():
+            _obs['real_obs'] = (*_obs['real_obs'], enc_score)
+        return obs
 
     def render(self, mode=None) -> None:
         pass
 
 
 def take6(config: Dict[str, Any]) -> gym.Env:
-    return Take6(Table(config['num-players']), Deck())
+    num_players = config['num-players']
+    scoreboard = Scoreboard(num_players)
+    _env = Take6(Table(num_players), Deck(), scoreboard)
+
+    rwd_fn = config['rwd-fn']
+    if rwd_fn == 'proportional-score':
+        _env = ProportionalRwd(_env, scoreboard, num_players)
+    elif rwd_fn == 'classification':
+        _env = ClassificationRwd(_env, scoreboard, num_players)
+
+    if config['with-scores']:
+        _env = ScoreWrapper(_env, scoreboard)
+
+    return _env

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from take6 import env
+from tests.take6 import tools
 
 
 class TestTable:
@@ -239,6 +240,94 @@ class TestHand:
 
         assert np.array_equal(enc, expected)
         assert env.Hand.enc_space().contains(enc)
+
+
+class TestScoreboard:
+
+    def test_sum(self) -> None:
+        scoreboard = env.Scoreboard(num_players=4)
+
+        scoreboard += np.array([3, 2, 4, 1])
+        assert np.array_equal(scoreboard.scores, np.array([3, 2, 4, 1]))
+
+        scoreboard += np.array([1, 0, 2, 3])
+        assert np.array_equal(scoreboard.scores, np.array([4, 2, 6, 4]))
+
+    def test_reset(self) -> None:
+        scoreboard = env.Scoreboard(num_players=4)
+
+        scoreboard += np.array([3, 2, 4, 1])
+        scoreboard.reset()
+
+        assert np.array_equal(scoreboard.scores, np.array([0, 0, 0, 0]))
+
+    def test_encode(self) -> None:
+        scoreboard = env.Scoreboard(num_players=4)
+
+        scoreboard += np.array([-0, -66, -33, -67])
+
+        assert np.array_equal(scoreboard.encode(), np.array([0, 1, .5, 1]))
+
+
+class TestClassificationRwd:
+
+    def test_rwd_according_to_final_classification(self) -> None:
+        _env = tools.GenericEnv(step_fn=lambda a: ({i: np.random.randint(10) for i in range(4)},
+                                                   {i: np.random.random() for i in range(4)},
+                                                   {i: True for i in range(4)},
+                                                   {i: {} for i in range(4)}))
+        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard += np.array([-4, -6, -7, -3])
+        wrapped = env.ClassificationRwd(_env, scoreboard, num_players=4)
+
+        _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
+
+        assert {0: -1, 1: -2, 2: -3, 3: 0} == rwd
+
+    def test_rwd_is_zero_when_match_is_not_finished(self) -> None:
+        _env = tools.GenericEnv(step_fn=lambda a: ({i: np.random.randint(10) for i in range(4)},
+                                                   {i: np.random.random() for i in range(4)},
+                                                   {i: False for i in range(4)},
+                                                   {i: {} for i in range(4)}))
+        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard += np.array([4, 6, 7, 3])
+        wrapped = env.ClassificationRwd(_env, scoreboard, num_players=4)
+
+        _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
+
+        assert {0: 0, 1: 0, 2: 0, 3: 0} == rwd
+
+
+class TestProportionalRwd:
+
+    def test_rwd_according_to_final_relative_scores(self) -> None:
+        _env = tools.GenericEnv(step_fn=lambda a: ({i: np.random.randint(10) for i in range(4)},
+                                                   {i: np.random.random() for i in range(4)},
+                                                   {i: True for i in range(4)},
+                                                   {i: {} for i in range(4)}))
+        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard += np.array([-4, -6, -2, -8])
+        wrapped = env.ProportionalRwd(_env, scoreboard, num_players=4)
+
+        _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
+
+        expected = {0: -4 / 20, 1: -6 / 20, 2: -2 / 20, 3: -8 / 20}
+        assert rwd.keys() == expected.keys()
+        for k, v in rwd.items():
+            assert rwd[k] == pytest.approx(expected[k])
+
+    def test_rwd_is_zero_when_match_is_not_finished(self) -> None:
+        _env = tools.GenericEnv(step_fn=lambda a: ({i: np.random.randint(10) for i in range(4)},
+                                                   {i: np.random.random() for i in range(4)},
+                                                   {i: False for i in range(4)},
+                                                   {i: {} for i in range(4)}))
+        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard += np.array([4, 6, 7, 3])
+        wrapped = env.ProportionalRwd(_env, scoreboard, num_players=4)
+
+        _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
+
+        assert {0: 0, 1: 0, 2: 0, 3: 0} == rwd
 
 
 if __name__ == '__main__':

@@ -49,8 +49,8 @@ class TrackingCallback(callbacks.DefaultCallbacks):
         # custom metrics
         _run.log(name='training/win_rate', value=result['win_rate'])
         _run.log(name='training/score_rate', value=result['score_rate'])
-        _run.log(name='eval/relative_score', value=result['relative_score'])
-        _run.log(name='eval/weighted_classification', value=result['weighted_classification'])
+        _run.log(name='training/relative_score', value=result['relative_score'])
+        _run.log(name='training/weighted_classification', value=result['weighted_classification'])
         _run.log(name='training/policy_reward_mean', value=result['policy_reward_mean']['learner'])
         _run.log(name='training/league_size', value=result['league_size'])
 
@@ -95,9 +95,9 @@ class TrackingCallback(callbacks.DefaultCallbacks):
         if 'evaluation' in result and 'custom_metrics' in result['evaluation']:
             _run.log(name='eval/policy_reward_mean', value=result['evaluation']['policy_reward_mean']['learner'])
             _run.log(name='eval/score_rate', value=result['evaluation']['custom_metrics']['eval_score_rate'])
-            _run.log(name='eval/relative_score', value=result['evaluation']['custom_metrics']['relative_score'])
+            _run.log(name='eval/relative_score', value=result['evaluation']['custom_metrics']['eval_relative_score'])
             _run.log(name='eval/weighted_classification',
-                     value=result['evaluation']['custom_metrics']['weighted_classification'])
+                     value=result['evaluation']['custom_metrics']['eval_weighted_classification'])
             _run.log(name='eval/win_rate', value=result['evaluation']['custom_metrics']['eval_win_rate'])
 
             ratings = result['evaluation']['custom_metrics']['trueskill']
@@ -149,7 +149,7 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['relative_score'] = result['custom_metrics']['relative_score_mean']
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
-        if self._training_step > 0 and self._training_step % 25 == 0 and False:
+        if self._training_step > 0 and self._training_step % 10 == 0 and False:
             new_pol_id = f'opponent_v{self.current_opponent}'
 
             def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
@@ -254,6 +254,8 @@ class Evaluation:
         custom_metrics['trueskill'] = self._ratings
         custom_metrics['eval_win_rate'] = np.mean(custom_metrics['win'])
         custom_metrics['eval_score_rate'] = np.mean(custom_metrics['score'])
+        custom_metrics['eval_relative_score'] = np.mean(custom_metrics['relative_score'])
+        custom_metrics['eval_weighted_classification'] = np.mean(custom_metrics['weighted_classification'])
 
         return metrics
 
@@ -302,7 +304,11 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         config={
             # Training settings
             'env': 'take6',
-            'env_config': {'num-players': 4},
+            'env_config': {
+                'num-players': 4,
+                'rwd-fn': _namespace.rwd_fn,
+                'with-scores': _namespace.with_scores,
+            },
             'num_workers': num_workers,
             'num_cpus_per_worker': 1,
             'num_envs_per_worker': num_envs_per_worker,
@@ -394,6 +400,10 @@ if __name__ == '__main__':
     parser.add_argument('--vf-loss-coeff', type=float, default=1.,
                         help='The value loss coefficient (optimize it if actor and critic share layers)')
     parser.add_argument('--lr', type=float, default=6e-6, help='The learning rate')
+    parser.add_argument('--rwd-fn', type=str, default='raw-score',
+                        choices=['raw-score', 'proportional-score', 'classification'],
+                        help='The reward signal to use')
+    parser.add_argument('--with-scores', action='store_true', help='Add scores to agent\'s observations')
 
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
