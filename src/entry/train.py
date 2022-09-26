@@ -149,7 +149,7 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['relative_score'] = result['custom_metrics']['relative_score_mean']
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
-        if self._training_step > 0 and self._training_step % 10 == 0 and False:
+        if self._training_step > 0 and self._training_step % 20 == 0 and namespace.self_play:
             new_pol_id = f'opponent_v{self.current_opponent}'
 
             def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
@@ -411,7 +411,9 @@ if __name__ == '__main__':
                         choices=['raw-score', 'proportional-score', 'classification'],
                         help='The reward signal to use')
     parser.add_argument('--with-scores', action='store_true', help='Add scores to agent\'s observations')
-    parser.add_argument('--with-history', action='store_true', help='Add scores to agent\'s observations')
+    parser.add_argument('--with-history', action='store_true',
+                        help='Add history of played cards to agent\'s observations')
+    parser.add_argument('--self-play', action='store_true', help='Train the agent through self-play')
 
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
