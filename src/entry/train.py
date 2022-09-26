@@ -105,10 +105,12 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _opponent_v0 = ratings['opponent_v0']
             _run.log(name='eval/mu', value=_learner.mu)
             _run.log(name='eval/sigma', value=_learner.sigma)
+            _run.log(name='eval/mmr', value=10 * (_learner.mu - 3 * _learner.sigma))
             _run.log(name='eval/quality', value=trueskill.quality_1vs1(_learner, _opponent_v0))
             _run.log(name='eval/win_probability', value=win_probability(_learner, _opponent_v0))
             _run.log(name='eval/opponent_v0_mu', value=_opponent_v0.mu)
             _run.log(name='eval/opponent_v0_sigma', value=_opponent_v0.sigma)
+            _run.log(name='eval/opponent_v0_mmr', value=10 * (_opponent_v0.mu - 3 * _opponent_v0.sigma))
 
 
 class SelfPlayCallback(callbacks.DefaultCallbacks):
