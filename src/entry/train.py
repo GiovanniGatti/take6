@@ -158,19 +158,13 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
                     # already selected between two calls of this function.
                     # The workaround I found was to store this temporary
                     # information in the user_data section of the episode.
-                    episode.user_data['selected_policies_id'] = []
+                    weights = np.arange(self.current_opponent + 1)[::-1] / 4
+                    weights = np.exp(-weights) / np.sum(np.exp(-weights))
+                    _ids = np.random.choice(self.current_opponent + 1, size=3, p=weights, replace=False)
+                    episode.user_data['selected_policies_id'] = _ids
                     return 'learner'
 
-                already_selected_ids = np.array(episode.user_data['selected_policies_id'], dtype=int)
-
-                weights = np.arange(self.current_opponent + 1)[::-1] / 2
-                weights[already_selected_ids] = np.inf
-                weights = np.exp(-weights) / np.sum(np.exp(-weights))
-                _id = np.random.choice(list(range(self.current_opponent + 1)), p=weights)
-
-                episode.user_data['selected_policies_id'].append(_id)
-
-                return 'opponent_v{}'.format(_id)
+                return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
 
             new_policy = trainer.add_policy(
                 policy_id=new_pol_id,
@@ -197,16 +191,11 @@ class Evaluation:
         def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
             if agent_id == 0:
                 episode.user_data['selected_policies_id'] = []
+                num_policies = len(worker.policy_map) - 1
+                _ids = np.random.choice(num_policies, size=3, replace=False)
+                episode.user_data['selected_policies_id'] = _ids
                 return 'learner'
-            already_selected_ids = np.array(episode.user_data['selected_policies_id'], dtype=int)
-            num_policies = len(worker.policy_map) - 1
-            choices = np.arange(num_policies)
-            select = np.ones_like(choices, dtype=bool)
-            select[already_selected_ids] = False
-            choices = choices[select]
-            _id = np.random.choice(choices)
-            episode.user_data['selected_policies_id'].append(_id)
-            return 'opponent_v{}'.format(_id)
+            return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
 
         eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
 
@@ -217,9 +206,20 @@ class Evaluation:
         try:
             for i in range(max(1, round(num_episodes / num_workers))):
                 ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
-        except AssertionError or StopIteration:
-            _, new_workers = eval_workers.recreate_failed_workers(_algorithm.workers.local_worker())
-            eval_workers.reset(new_workers)
+        except AssertionError or StopIteration or TypeError:
+            local = _algorithm.workers.local_worker()
+            _, new_workers = eval_workers.recreate_failed_workers(local)
+
+            def _fn(worker: rllib.RolloutWorker) -> None:
+                for _id, _p in local.policy_dict.items():
+                    worker.add_policy(
+                        policy_id=_id,
+                        policy_cls=type(_p),
+                        policy_mapping_fn=eval_policy_mapping_fn,
+                    )
+
+            eval_workers.foreach_worker(lambda w: _fn(w))
+            _algorithm.workers.sync_weights()
             return self(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
 
         episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
@@ -269,10 +269,11 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         num_workers = 1
         num_envs_per_worker = 1
         sgd_minibatch_size = 10
-        num_sgd_iter = 2
+        num_sgd_iter = 3
         eval_workers = 1
         framework = 'tf2'
         local_dir = str(pathlib.Path(_tmp_dir, 'ray-results'))
+        evaluation_duration = 8
     else:
         num_workers = num_cpus - eval_workers - 1
         num_envs_per_worker = int(math.ceil(_namespace.batch_size / (num_workers * 10)))
@@ -280,6 +281,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         num_sgd_iter = _namespace.num_sgd_iter
         framework = 'tf'
         local_dir = './logs/ray-results'
+        evaluation_duration = 256
 
     train_batch_size = num_workers * num_envs_per_worker * 10
 
@@ -295,7 +297,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
 
     eval_method = Evaluation()
 
-    def warmup_agent_mapping(agent_id, **kwargs):
+    def warmup_agent_mapping(agent_id, episode, worker, **kwargs) -> str:
         return 'learner' if agent_id == 0 else \
             'opponent_v{}'.format(agent_id - 1)
 
@@ -369,8 +371,12 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'evaluation_interval': 1,
             'custom_eval_function': lambda alg, workers: eval_method(alg, workers),
             'evaluation_num_workers': eval_workers,
-            'evaluation_duration': 2 if _namespace.debugging else 1024,
+            'evaluation_duration': evaluation_duration,
             'evaluation_duration_unit': 'episodes',
+
+            'ignore_worker_failures': True,
+            'recreate_failed_workers': True,
+            'num_consecutive_worker_failures_tolerance': 3,
 
             'callbacks': callbacks.MultiCallbacks([SelfPlayCallback, TrackingCallback]),
         },
