@@ -115,11 +115,6 @@ class TrackingCallback(callbacks.DefaultCallbacks):
 
 class SelfPlayCallback(callbacks.DefaultCallbacks):
 
-    def __init__(self):
-        super().__init__()
-        self.current_opponent = 3
-        self._training_step = 0
-
     def on_episode_end(self, *,
                        worker: rllib.RolloutWorker,
                        base_env: rllib.BaseEnv,
@@ -151,23 +146,25 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['relative_score'] = result['custom_metrics']['relative_score_mean']
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
-        if self._training_step > 0 and self._training_step % 20 == 0 and namespace.self_play:
-            new_pol_id = f'opponent_v{self.current_opponent}'
+        current_opponent = len(trainer.workers.local_worker().policy_dict) - 1
 
+        if trainer.iteration > 0 and trainer.iteration % 20 == 0 and namespace.self_play:
             def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
                 if agent_id == 0:
                     # I haven't found anyway to know which policies were
                     # already selected between two calls of this function.
                     # The workaround I found was to store this temporary
                     # information in the user_data section of the episode.
-                    weights = np.arange(self.current_opponent + 1)[::-1] / 4
+                    num_opponents = len(worker.policy_dict) - 1
+                    weights = np.arange(num_opponents)[::-1] / 4
                     weights = np.exp(-weights) / np.sum(np.exp(-weights))
-                    _ids = np.random.choice(self.current_opponent + 1, size=3, p=weights, replace=False)
+                    _ids = np.random.choice(num_opponents, size=3, p=weights, replace=False)
                     episode.user_data['selected_policies_id'] = _ids
                     return 'learner'
 
                 return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
 
+            new_pol_id = f'opponent_v{current_opponent}'
             new_policy = trainer.add_policy(
                 policy_id=new_pol_id,
                 policy_cls=type(trainer.get_policy('learner')),
@@ -178,10 +175,9 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
             new_policy.set_state(main_state)
             trainer.workers.sync_weights()
 
-            self.current_opponent += 1
+            current_opponent += 1
 
-        result['league_size'] = self.current_opponent
-        self._training_step += 1
+        result['league_size'] = current_opponent
 
 
 class Evaluation:
