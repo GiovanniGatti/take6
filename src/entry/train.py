@@ -180,8 +180,9 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
 
 
 def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
-    # trueskill.setup(mu=100., sigma=30., beta=15., tau=30. / 200, draw_probability=0.001)
     if not hasattr(_algorithm, 'ratings'):
+        # see https://trueskill.info/help.html
+        trueskill.setup(mu=25., sigma=25. / 3, beta=20.8, tau=25. / 150, draw_probability=0.9)
         _algorithm.ratings = defaultdict(lambda: trueskill.Rating())
 
     def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
