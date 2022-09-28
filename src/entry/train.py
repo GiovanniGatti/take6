@@ -5,18 +5,16 @@ import pathlib
 import sys
 import tempfile
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Any, Optional, Tuple, Type, List
 
 import numpy as np
 import ray
 import trueskill
 from azureml import core
 from ray import tune, rllib
-from ray.exceptions import RayTaskError
 from ray.rllib import agents
-from ray.rllib.agents import callbacks
 from ray.rllib.agents.ppo import PPOTrainer
-from ray.rllib.algorithms import algorithm
+from ray.rllib.algorithms import algorithm, callbacks
 from ray.rllib.evaluation import worker_set
 from ray.rllib.evaluation.metrics import collect_episodes, summarize_episodes
 from ray.rllib.models import ModelCatalog
@@ -202,22 +200,28 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     num_workers = len(eval_workers.remote_workers())
 
     try:
-        for i in range(max(1, round(num_episodes / num_workers))):
+        for _ in range(max(1, round(num_episodes / num_workers))):
             ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
-    except StopIteration or RayTaskError:
+    except Exception:
         local = _algorithm.workers.local_worker()
-        _, new_workers = eval_workers.recreate_failed_workers(local)
+        _, new_workers = _algorithm.evaluation_workers.recreate_failed_workers(local)
+        eval_workers = _algorithm.evaluation_workers
 
-        def _fn(worker: rllib.RolloutWorker) -> None:
-            for _id, _p in local.policy_dict.items():
-                worker.add_policy(
-                    policy_id=_id,
-                    policy_cls=type(_p),
-                    policy_mapping_fn=eval_policy_mapping_fn,
-                )
+        def _fn(worker: rllib.RolloutWorker, _policies_to_add: List[Tuple[str, Type[rllib.Policy]]]) -> None:
+            known_policies = worker.policy_dict.keys()
+            for _id, _t in _policies_to_add:
+                if _id not in known_policies:
+                    worker.add_policy(
+                        policy_id=_id,
+                        policy_cls=_t,
+                        policy_mapping_fn=eval_policy_mapping_fn,
+                    )
 
-        eval_workers.foreach_worker(lambda w: _fn(w))
-        _algorithm.workers.sync_weights()
+        policies = [(k, type(local.get_policy(k))) for k, v in local.policy_dict.items()]
+        eval_workers.foreach_worker(lambda w: _fn(w, policies))
+        policies_to_sync = [
+            k for k in local.policy_dict.keys() if k not in ('opponent_v0', 'opponent_v1', 'opponent_v2')]
+        eval_workers.sync_weights(policies_to_sync, local)
         return evaluation(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
 
     episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
