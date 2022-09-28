@@ -180,82 +180,81 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['league_size'] = current_opponent
 
 
-class Evaluation:
+def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
+    # trueskill.setup(mu=100., sigma=30., beta=15., tau=30. / 200, draw_probability=0.001)
+    if not hasattr(_algorithm, 'ratings'):
+        _algorithm.ratings = defaultdict(lambda: trueskill.Rating())
 
-    def __init__(self):
-        self._ratings = defaultdict(lambda: trueskill.Rating())
+    def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
+        if agent_id == 0:
+            episode.user_data['selected_policies_id'] = []
+            num_policies = len(worker.policy_map) - 1
+            _ids = np.random.choice(num_policies, size=3, replace=False)
+            episode.user_data['selected_policies_id'] = _ids
+            return 'learner'
+        return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
 
-    def __call__(self, _algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet):
-        def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
-            if agent_id == 0:
-                episode.user_data['selected_policies_id'] = []
-                num_policies = len(worker.policy_map) - 1
-                _ids = np.random.choice(num_policies, size=3, replace=False)
-                episode.user_data['selected_policies_id'] = _ids
-                return 'learner'
-            return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
+    eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
 
-        eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
+    assert _algorithm.config['evaluation_duration_unit'] == 'episodes'
+    num_episodes = _algorithm.config['evaluation_duration']
+    num_workers = len(eval_workers.remote_workers())
 
-        assert _algorithm.config['evaluation_duration_unit'] == 'episodes'
-        num_episodes = _algorithm.config['evaluation_duration']
-        num_workers = len(eval_workers.remote_workers())
+    try:
+        for i in range(max(1, round(num_episodes / num_workers))):
+            ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
+    except AssertionError or StopIteration or TypeError:
+        local = _algorithm.workers.local_worker()
+        _, new_workers = eval_workers.recreate_failed_workers(local)
 
-        try:
-            for i in range(max(1, round(num_episodes / num_workers))):
-                ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
-        except AssertionError or StopIteration or TypeError:
-            local = _algorithm.workers.local_worker()
-            _, new_workers = eval_workers.recreate_failed_workers(local)
+        def _fn(worker: rllib.RolloutWorker) -> None:
+            for _id, _p in local.policy_dict.items():
+                worker.add_policy(
+                    policy_id=_id,
+                    policy_cls=type(_p),
+                    policy_mapping_fn=eval_policy_mapping_fn,
+                )
 
-            def _fn(worker: rllib.RolloutWorker) -> None:
-                for _id, _p in local.policy_dict.items():
-                    worker.add_policy(
-                        policy_id=_id,
-                        policy_cls=type(_p),
-                        policy_mapping_fn=eval_policy_mapping_fn,
-                    )
+        eval_workers.foreach_worker(lambda w: _fn(w))
+        _algorithm.workers.sync_weights()
+        return evaluation(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
 
-            eval_workers.foreach_worker(lambda w: _fn(w))
-            _algorithm.workers.sync_weights()
-            return self(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
+    episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
 
-        episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
+    for episode in episodes:
+        ratings = []
+        scores = []
+        players = []
 
-        for episode in episodes:
-            ratings = []
-            scores = []
-            players = []
+        for (_, t), score in episode.agent_rewards.items():
+            ratings.append((_algorithm.ratings[t],))
+            scores.append(score)
+            players.append(t)
 
-            for (_, t), score in episode.agent_rewards.items():
-                ratings.append((self._ratings[t],))
-                scores.append(score)
-                players.append(t)
+        classification = np.zeros(len(ratings))
+        classification[np.argsort(scores)] = np.arange(4)[::-1]
+        s, c = np.unique(scores, return_counts=True)
+        for _s in s[c > 1]:  # handle ties
+            classification[scores == _s] = np.min(classification[scores == _s])
+        new_ratings = trueskill.rate(ratings, ranks=list(classification))
 
-            classification = np.zeros(len(ratings))
-            classification[np.argsort(scores)] = np.arange(4)[::-1]
-            s, c = np.unique(scores, return_counts=True)
-            for _s in s[c > 1]:  # handle ties
-                classification[scores == _s] = np.min(classification[scores == _s])
-            new_ratings = trueskill.rate(ratings, ranks=list(classification))
+        episode.custom_metrics['win'] = classification[0] == 0
 
-            episode.custom_metrics['win'] = classification[0] == 0
+        assert np.unique(players).shape[0] == 4, 'Repeated versions of a policy are playing within the same match'
 
-            assert np.unique(players).shape[0] == 4, 'Repeated versions of a policy are playing within the same match'
+        for i, p in enumerate(players):
+            (_algorithm.ratings[p],) = new_ratings[i]
 
-            for i, p in enumerate(players):
-                (self._ratings[p],) = new_ratings[i]
+    metrics = summarize_episodes(episodes, keep_custom_metrics=True)
 
-        metrics = summarize_episodes(episodes, keep_custom_metrics=True)
+    custom_metrics = metrics['custom_metrics']
+    custom_metrics['trueskill'] = _algorithm.ratings
+    custom_metrics['eval_win_rate'] = np.mean(custom_metrics['win'])
+    custom_metrics['eval_score_rate'] = np.mean(custom_metrics['score'])
+    custom_metrics['eval_relative_score'] = np.mean(custom_metrics['relative_score'])
+    custom_metrics['eval_weighted_classification'] = np.mean(custom_metrics['weighted_classification'])
 
-        custom_metrics = metrics['custom_metrics']
-        custom_metrics['trueskill'] = self._ratings
-        custom_metrics['eval_win_rate'] = np.mean(custom_metrics['win'])
-        custom_metrics['eval_score_rate'] = np.mean(custom_metrics['score'])
-        custom_metrics['eval_relative_score'] = np.mean(custom_metrics['relative_score'])
-        custom_metrics['eval_weighted_classification'] = np.mean(custom_metrics['weighted_classification'])
-
-        return metrics
+    return metrics
 
 
 def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.ExperimentAnalysis:
@@ -292,8 +291,6 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
 
     ModelCatalog.register_custom_model('take6', model.Take6Model)
     tune.register_env('take6', env.take6)
-
-    eval_method = Evaluation()
 
     def warmup_agent_mapping(agent_id, episode, worker, **kwargs) -> str:
         return 'learner' if agent_id == 0 else \
@@ -367,14 +364,10 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
 
             # Policy evaluation config
             'evaluation_interval': 1,
-            'custom_eval_function': lambda alg, workers: eval_method(alg, workers),
+            'custom_eval_function': evaluation,
             'evaluation_num_workers': eval_workers,
             'evaluation_duration': evaluation_duration,
             'evaluation_duration_unit': 'episodes',
-
-            'ignore_worker_failures': True,
-            'recreate_failed_workers': True,
-            'num_consecutive_worker_failures_tolerance': 3,
 
             'callbacks': callbacks.MultiCallbacks([SelfPlayCallback, TrackingCallback]),
         },
