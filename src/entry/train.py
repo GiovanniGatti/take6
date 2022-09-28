@@ -12,6 +12,7 @@ import ray
 import trueskill
 from azureml import core
 from ray import tune, rllib
+from ray.exceptions import RayTaskError
 from ray.rllib import agents
 from ray.rllib.agents import callbacks
 from ray.rllib.agents.ppo import PPOTrainer
@@ -203,7 +204,7 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     try:
         for i in range(max(1, round(num_episodes / num_workers))):
             ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
-    except AssertionError or StopIteration or TypeError:
+    except StopIteration or RayTaskError:
         local = _algorithm.workers.local_worker()
         _, new_workers = eval_workers.recreate_failed_workers(local)
 
