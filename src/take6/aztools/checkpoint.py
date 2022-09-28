@@ -1,10 +1,12 @@
 import json
+import math
 import pathlib
 import re
 import tempfile
 from typing import Optional, Dict, Any
 
 from azureml import core
+from azureml._common.async_utils import task_queue
 
 from take6.aztools import workspace
 
@@ -15,8 +17,28 @@ def load_checkpoint_from(run_id: str, checkpoint: int, target_dir: str = tempfil
     checkpoint_id = 'checkpoint-{}'.format(checkpoint)
     target_checkpoint = next(filter(lambda filename: filename.endswith(checkpoint_id), run.get_file_names()))
     parent = pathlib.Path(target_checkpoint).parent
+    task_queue.DEFAULT_FLUSH_TIMEOUT_SECONDS = 300
     run.download_files(prefix=str(parent), output_directory=target_dir)
     return str(pathlib.Path(target_dir, parent, checkpoint_id))
+
+
+def retrieve_metrics(run_id: str) -> None:
+    ws = workspace.get_workspace()
+    run = core.Run.get(ws, run_id)
+    current_run = core.Run.get_context()
+
+    # from https://stackoverflow.com/questions/24483182/python-split-list-into-n-chunks
+    def chunks(l, n):
+        """Yield n number of sequential chunks from l."""
+        d, r = divmod(len(l), n)
+        for i in range(n):
+            si = (d + 1) * (i if i < r else r) + d * (0 if i < r else i - r)
+            yield l[si:si + (d + 1 if i < r else d)]
+
+    metrics = run.get_metrics()
+    for k, v in metrics.items():
+        for chunk in chunks(v, max(1, math.ceil(len(v) / 250))):  # see https://aka.ms/azure-machine-learning-limits
+            current_run.log_list(name=k, value=chunk)
 
 
 def get_latest_checkpoint(run_id: str) -> Optional[int]:

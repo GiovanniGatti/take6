@@ -285,6 +285,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
 
     _checkpoint = checkpoint.recover_from_preemption(local_dir)
     if _checkpoint is None and _namespace.checkpoint is not None:
+        checkpoint.retrieve_metrics(_namespace.run_id)
         _checkpoint = checkpoint.load_checkpoint_from(_namespace.run_id, _namespace.checkpoint)
         print('Using checkpoint file \'{}\' from run-id \'{}\''.format(_checkpoint, _namespace.run_id))
     elif _checkpoint is not None:
