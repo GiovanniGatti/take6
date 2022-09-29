@@ -1,3 +1,4 @@
+import abc
 from typing import Dict, Any, Tuple, List
 
 import gym
@@ -165,21 +166,51 @@ class Scoreboard:
         self._scores = np.zeros_like(self._scores)
 
 
-# noinspection PyMissingConstructor
-class Take6(env.MultiAgentEnv):
+class GroupedActionMultiEnv(env.MultiAgentEnv, abc.ABC):
+
+    def __init__(self, num_players: int):
+        super().__init__()
+        self.num_players = num_players
+        self._agent_ids = set(range(num_players))
+
+    def observation_space_sample(self, agent_ids: List[Any] = None) -> MultiAgentDict:
+        if agent_ids is None:
+            agent_ids = list(range(self.num_players))
+        obs = {agent_id: self.observation_space.sample() for agent_id in agent_ids}
+        return obs
+
+    def action_space_sample(self, agent_ids: List[Any] = None) -> MultiAgentDict:
+        if agent_ids is None:
+            agent_ids = list(range(self.num_players))
+        actions = {agent_id: self.action_space.sample() for agent_id in agent_ids}
+        return actions
+
+    def action_space_contains(self, x: MultiAgentDict) -> bool:
+        if not isinstance(x, dict):
+            return False
+        return all(self.action_space.contains(val) for val in x.values())
+
+    def observation_space_contains(self, x: MultiAgentDict) -> bool:
+        if not isinstance(x, dict):
+            return False
+        return all(self.observation_space.contains(val) for val in x.values())
+
+
+class Take6(GroupedActionMultiEnv):
 
     def __init__(self, table: Table, deck: Deck, scoreboard: Scoreboard) -> None:
-        self.action_space = spaces.Discrete(10)
-        self.observation_space = spaces.Dict(
-            {'action_mask': spaces.MultiBinary(10),
-             'real_obs': spaces.Tuple((Hand.enc_space(), Table.enc_space()))})
-
         self._table = table
         self._deck = deck
         self._hands: List[Hand] = []
         self._history = np.zeros(104, dtype=int)
 
+        self.action_space = spaces.Discrete(10)
+        self.observation_space = spaces.Dict(
+            {'action_mask': spaces.MultiBinary(10),
+             'real_obs': spaces.Tuple((Hand.enc_space(), Table.enc_space()))})
+
         self._scoreboard = scoreboard
+        super().__init__(table.num_players)
 
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
@@ -217,10 +248,10 @@ class Take6(env.MultiAgentEnv):
         pass
 
 
-# noinspection PyMissingConstructor
-class ClassificationRwd(env.MultiAgentEnv):
+class ClassificationRwd(GroupedActionMultiEnv):
 
     def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, num_players: int):
+        super().__init__(num_players)
         self._env = _env
         self._num_players = num_players
         self._scoreboard = scoreboard
@@ -252,10 +283,10 @@ class ClassificationRwd(env.MultiAgentEnv):
         pass
 
 
-# noinspection PyMissingConstructor
-class ProportionalRwd(env.MultiAgentEnv):
+class ProportionalRwd(GroupedActionMultiEnv):
 
     def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, num_players: int):
+        super().__init__(num_players)
         self._env = _env
         self._num_players = num_players
         self._scoreboard = scoreboard
@@ -282,12 +313,12 @@ class ProportionalRwd(env.MultiAgentEnv):
         pass
 
 
-# noinspection PyMissingConstructor
-class ScoreWrapper(env.MultiAgentEnv):
+class ScoreWrapper(GroupedActionMultiEnv):
 
-    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard):
+    def __init__(self, _env: GroupedActionMultiEnv, scoreboard: Scoreboard):
         assert isinstance(_env.observation_space, spaces.Dict), 'Original environment must have a Dict obs. space'
         assert 'real_obs' in _env.observation_space.keys(), 'Original environment must have an real_obs space'
+        super().__init__(_env.num_players)
 
         self._env = _env
         self._scoreboard = scoreboard
@@ -316,11 +347,12 @@ class ScoreWrapper(env.MultiAgentEnv):
 
 
 # noinspection PyMissingConstructor
-class PlayedCardsWrapper(env.MultiAgentEnv):
+class PlayedCardsWrapper(GroupedActionMultiEnv):
 
-    def __init__(self, _env: env.MultiAgentEnv, table: Table):
+    def __init__(self, _env: GroupedActionMultiEnv, table: Table):
         assert isinstance(_env.observation_space, spaces.Dict), 'Original environment must have a Dict obs. space'
         assert 'real_obs' in _env.observation_space.keys(), 'Original environment must have an real_obs space'
+        super().__init__(_env.num_players)
 
         self.observation_space = _env.observation_space
         self.action_space = _env.action_space
