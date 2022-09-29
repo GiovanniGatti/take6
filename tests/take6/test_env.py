@@ -171,7 +171,7 @@ class TestTable:
         t = env.Table.from_nparray(np.array([[13, 15, 0, 0, 0],
                                              [9, 0, 0, 0, 0],
                                              [22, 83, 101, 0, 0],
-                                             [55, 75, 104, 0, 0]]), num_players=random.randint(2, 11))
+                                             [55, 75, 104, 0, 0]]), num_players=random.randint(2, 10))
 
         enc = t.encode()
 
@@ -204,7 +204,7 @@ class TestDeck:
 
         assert stacks.shape == (4,)
         assert len(hands) == 3
-        assert hands[random.randint(0, 3)].cards.shape == (10,)
+        assert hands[random.randint(0, 2)].cards.shape == (10,)
         all_cards = np.array([hands[i].cards for i in range(3)])
         assert np.alltrue(np.unique(np.concatenate((stacks, all_cards.flatten())), return_counts=True)[1] == 1)
 

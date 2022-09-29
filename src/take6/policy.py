@@ -88,7 +88,7 @@ class RandomPolicy(_NotLearnablePolicy):
         self._rand = random.Random()
 
     def actions(self, obs_batch: Union[List[TensorStructType], TensorStructType]) -> np.ndarray:
-        mask = obs_batch[:, :10]
+        mask = obs_batch['action_mask']
         weights = np.zeros_like(mask)
         weights[mask == 0] = -np.inf
         probs = np.exp(weights) / np.sum(np.exp(weights), axis=1).reshape(weights.shape[0], 1)

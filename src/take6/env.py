@@ -112,6 +112,10 @@ class Hand:
     def enc_space(cls) -> spaces.Space:
         return spaces.Box(low=0, high=1, shape=(104,))
 
+    @classmethod
+    def mask_enc_space(cls) -> spaces.Space:
+        return spaces.Box(low=0, high=1, shape=(10,), dtype=np.float32)
+
     def encode(self) -> np.ndarray:
         enc = np.zeros(104, dtype=np.float32)
         idx = self._cards[self._cards > 0] - 1
@@ -125,7 +129,7 @@ class Hand:
         return card
 
     def mask(self) -> np.ndarray:
-        return self._cards > 0
+        return (self._cards > 0).astype(np.float32)
 
 
 class Deck:
@@ -206,7 +210,7 @@ class Take6(GroupedActionMultiEnv):
 
         self.action_space = spaces.Discrete(10)
         self.observation_space = spaces.Dict(
-            {'action_mask': spaces.MultiBinary(10),
+            {'action_mask': Hand.mask_enc_space(),
              'real_obs': spaces.Tuple((Hand.enc_space(), Table.enc_space()))})
 
         self._scoreboard = scoreboard

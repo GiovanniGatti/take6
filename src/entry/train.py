@@ -376,6 +376,8 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'evaluation_duration': evaluation_duration,
             'evaluation_duration_unit': 'episodes',
 
+            '_disable_preprocessor_api': True,
+
             'callbacks': callbacks.MultiCallbacks([SelfPlayCallback, TrackingCallback]),
         },
         restore=_checkpoint,
