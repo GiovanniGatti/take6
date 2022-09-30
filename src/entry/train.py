@@ -99,14 +99,17 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             ratings = result['evaluation']['custom_metrics']['trueskill']
             _learner = ratings['learner']
             _opponent_v0 = ratings['opponent_v0']
+            _opponent_mmr = 10 * (_opponent_v0.mu - 3 * _opponent_v0.sigma)
+            _learner_mmr = 10 * (_learner.mu - 3 * _learner.sigma)
             _run.log(name='eval/mu', value=_learner.mu)
             _run.log(name='eval/sigma', value=_learner.sigma)
-            _run.log(name='eval/mmr', value=10 * (_learner.mu - 3 * _learner.sigma))
+            _run.log(name='eval/mmr', value=_learner_mmr)
             _run.log(name='eval/quality', value=trueskill.quality_1vs1(_learner, _opponent_v0))
             _run.log(name='eval/win_probability', value=win_probability(_learner, _opponent_v0))
             _run.log(name='eval/opponent_v0_mu', value=_opponent_v0.mu)
             _run.log(name='eval/opponent_v0_sigma', value=_opponent_v0.sigma)
-            _run.log(name='eval/opponent_v0_mmr', value=10 * (_opponent_v0.mu - 3 * _opponent_v0.sigma))
+            _run.log(name='eval/opponent_v0_mmr', value=_opponent_mmr)
+            _run.log(name='eval/relative_mmr', value=_learner_mmr - _opponent_mmr)
 
 
 class SelfPlayCallback(callbacks.DefaultCallbacks):
@@ -291,7 +294,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
 
     _checkpoint = checkpoint.recover_from_preemption(local_dir)
     if _checkpoint is None and _namespace.checkpoint is not None:
-        checkpoint.retrieve_metrics(_namespace.run_id)
+        checkpoint.retrieve_metrics(_namespace.run_id, _namespace.checkpoint)
         _checkpoint = checkpoint.load_checkpoint_from(_namespace.run_id, _namespace.checkpoint)
         print('Using checkpoint file \'{}\' from run-id \'{}\''.format(_checkpoint, _namespace.run_id))
     elif _checkpoint is not None:
