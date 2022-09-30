@@ -21,9 +21,14 @@ class TimedPPO(ppo.PPO):
                  **kwargs):
         super().__init__(config, env, logger_creator, **kwargs)
         self._num_agent_steps_sampled = 0
+        self._loaded = False
 
     def step(self) -> ResultDict:
-        self._counters[NUM_AGENT_STEPS_SAMPLED] = 0 if not self._timesteps_total else self._timesteps_total
+        if self._timesteps_total and not self._loaded:
+            # in case of recovering from checkpoint
+            self._loaded = True
+            self._counters[NUM_AGENT_STEPS_SAMPLED] = self._timesteps_total
+            self.workers.sync_weights(global_vars={'timestep': self._timesteps_total})
         _result = super().step()
         num_agent_steps_sampled = _result[NUM_AGENT_STEPS_SAMPLED]
         _result[result.TIMESTEPS_THIS_ITER] = num_agent_steps_sampled - self._num_agent_steps_sampled
