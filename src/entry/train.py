@@ -152,8 +152,12 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
                     # The workaround I found was to store this temporary
                     # information in the user_data section of the episode.
                     num_opponents = len(worker.policy_dict) - 1
-                    weights = np.arange(num_opponents)[::-1] / 4
+
+                    # ~90% chance of picking one of the last 5 policies
+                    # which represents the last 5 * 20 = 100 training iterations
+                    weights = np.arange(num_opponents)[::-1] / 2
                     weights = np.exp(-weights) / np.sum(np.exp(-weights))
+
                     _ids = np.random.choice(num_opponents, size=3, p=weights, replace=False)
                     episode.user_data['selected_policies_id'] = _ids
                     return 'learner'
