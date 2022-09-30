@@ -40,11 +40,7 @@ def win_probability(player_1, player_2):
 
 class TrackingCallback(callbacks.DefaultCallbacks):
 
-    def on_train_result(self, *,
-                        _algorithm: Optional['Algorithm'] = None,
-                        result: Dict[Any, Any],
-                        trainer: agents.Trainer,
-                        **kwargs: Dict[Any, Any]) -> None:
+    def on_train_result(self, result: Dict[Any, Any], **kwargs) -> None:
         _run = core.Run.get_context()
         # custom metrics
         _run.log(name='training/win_rate', value=result['win_rate'])
