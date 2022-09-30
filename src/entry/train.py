@@ -12,7 +12,6 @@ import ray
 import trueskill
 from azureml import core
 from ray import tune, rllib
-from ray.rllib import agents
 from ray.rllib.agents.ppo import PPOTrainer
 from ray.rllib.algorithms import algorithm, callbacks
 from ray.rllib.evaluation import worker_set
@@ -28,14 +27,6 @@ from take6 import env, model, policy
 from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
-
-
-def win_probability(player_1, player_2):
-    delta_mu = player_1.mu - player_2.mu
-    sum_sigma = sum(r.sigma ** 2 for r in [player_1, player_2])
-    ts = trueskill.global_env()
-    denom = math.sqrt(2 * (ts.beta * ts.beta) + sum_sigma)
-    return ts.cdf(delta_mu / denom)
 
 
 class TrackingCallback(callbacks.DefaultCallbacks):
@@ -105,7 +96,6 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _run.log(name='eval/sigma', value=_learner.sigma)
             _run.log(name='eval/mmr', value=_learner_mmr)
             _run.log(name='eval/quality', value=trueskill.quality_1vs1(_learner, _opponent_v0))
-            _run.log(name='eval/win_probability', value=win_probability(_learner, _opponent_v0))
             _run.log(name='eval/opponent_v0_mu', value=_opponent_v0.mu)
             _run.log(name='eval/opponent_v0_sigma', value=_opponent_v0.sigma)
             _run.log(name='eval/opponent_v0_mmr', value=_opponent_mmr)
