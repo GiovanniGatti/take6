@@ -116,8 +116,9 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         for _id in sorted(k[0] for k in episode.agent_rewards.keys()):
             scores.append(episode.last_info_for(_id)['score'])
 
-        classification = np.zeros(len(scores), dtype=np.int)
-        classification[np.argsort(scores)] = np.arange(4)[::-1]
+        num_players = len(scores)
+        classification = np.zeros(num_players, dtype=np.int)
+        classification[np.argsort(scores)] = np.arange(num_players)[::-1]
         s, c = np.unique(scores, return_counts=True)
         for _s in s[c > 1]:  # handle ties
             classification[scores == _s] = np.min(classification[scores == _s])
@@ -144,13 +145,14 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
                     # The workaround I found was to store this temporary
                     # information in the user_data section of the episode.
                     num_opponents = len(worker.policy_dict) - 1
+                    num_players = worker.policy_config['env_config']['num-players']
 
                     # ~90% chance of picking one of the last 5 policies
                     # which represents the last 5 * 20 = 100 training iterations
                     weights = np.arange(num_opponents)[::-1] / 2
                     weights = np.exp(-weights) / np.sum(np.exp(-weights))
 
-                    _ids = np.random.choice(num_opponents, size=3, p=weights, replace=False)
+                    _ids = np.random.choice(num_opponents, size=num_players - 1, p=weights, replace=False)
                     episode.user_data['selected_policies_id'] = _ids
                     return 'learner'
 
@@ -182,7 +184,8 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         if agent_id == 0:
             episode.user_data['selected_policies_id'] = []
             num_policies = len(worker.policy_map) - 1
-            _ids = np.random.choice(num_policies, size=3, replace=False)
+            num_players = worker.policy_config['env_config']['num-players']
+            _ids = np.random.choice(num_policies, size=num_players - 1, replace=False)
             episode.user_data['selected_policies_id'] = _ids
             return 'learner'
         return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
@@ -230,8 +233,9 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
             scores.append(score)
             players.append(t)
 
-        classification = np.zeros(len(ratings))
-        classification[np.argsort(scores)] = np.arange(4)[::-1]
+        num_players = len(players)
+        classification = np.zeros(num_players)
+        classification[np.argsort(scores)] = np.arange(num_players)[::-1]
         s, c = np.unique(scores, return_counts=True)
         for _s in s[c > 1]:  # handle ties
             classification[scores == _s] = np.min(classification[scores == _s])
@@ -239,7 +243,8 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 
         episode.custom_metrics['win'] = classification[0] == 0
 
-        assert np.unique(players).shape[0] == 4, 'Repeated versions of a policy are playing within the same match'
+        assert np.unique(players).shape[0] == num_players, \
+            'Repeated versions of a policy are playing within the same match'
 
         for i, p in enumerate(players):
             (_algorithm.ratings[p],) = new_ratings[i]
@@ -301,11 +306,18 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         entropy_coeff = _namespace.entropy_coeff[0]
     elif len(_namespace.entropy_coeff) == 2:
         entropy_coeff = max(_namespace.entropy_coeff)
-        decay_timesteps = 4 * int(_namespace.entropy_coeff_decay * _namespace.max_iterations) * train_batch_size
+        final_decay_it = int(_namespace.entropy_coeff_decay * _namespace.max_iterations)
+        decay_timesteps = _namespace.num_players * train_batch_size * final_decay_it
         entropy_coeff_schedule = [(0, max(_namespace.entropy_coeff)), (decay_timesteps, min(_namespace.entropy_coeff))]
     else:
         raise ValueError('Expected 1 (constant) or 2 (initial and final) values for'
                          ' the entropy coefficient hyperparamter, but found {}'.format(_namespace.entropy_coeff))
+
+    # Our main policy, we'd like to optimize.
+    policies = {'learner': PolicySpec(None, None, None, None), }
+    for i in range(_namespace.num_players):
+        # Warmup policies.
+        policies['opponent_v{}'.format(i)] = PolicySpec(policy.RandomPolicy, None, None, {})
 
     return tune.run(
         run_or_experiment=ppo.TimedPPO,
@@ -313,7 +325,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             # Training settings
             'env': 'take6',
             'env_config': {
-                'num-players': 4,
+                'num-players': _namespace.num_players,
                 'rwd-fn': _namespace.rwd_fn,
                 'with-scores': _namespace.with_scores,
                 'with-history': _namespace.with_history,
@@ -340,14 +352,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'lambda': vars(_namespace)['lambda'],
 
             'multiagent': {
-                'policies': {
-                    # Our main policy, we'd like to optimize.
-                    'learner': PolicySpec(None, None, None, None),
-                    # An initial random opponents to play against.
-                    'opponent_v0': PolicySpec(policy.RandomPolicy, None, None, {}),
-                    'opponent_v1': PolicySpec(policy.RandomPolicy, None, None, {}),
-                    'opponent_v2': PolicySpec(policy.RandomPolicy, None, None, {}),
-                },
+                'policies': policies,
                 'policy_mapping_fn': warmup_agent_mapping,
                 'policies_to_train': ['learner'],
             },
@@ -402,6 +407,8 @@ if __name__ == '__main__':
     # checkpoint
     parser.add_argument('--run-id', type=str, help='The run-id to start the training from')
     parser.add_argument('--checkpoint', type=int, help='The checkpoint number to start the training from')
+
+    parser.add_argument('--num-players', type=int, default=4, help='The number of players in the training env')
 
     # hyper-parameters
     parser.add_argument('--minibatch-size', type=int, default=2048, help='The sgd minibatch size')
