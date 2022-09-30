@@ -300,6 +300,17 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         return 'learner' if agent_id == 0 else \
             'opponent_v{}'.format(agent_id - 1)
 
+    entropy_coeff_schedule = None
+    if len(_namespace.entropy_coeff) == 1:
+        entropy_coeff = _namespace.entropy_coeff[0]
+    elif len(_namespace.entropy_coeff) == 2:
+        entropy_coeff = max(_namespace.entropy_coeff)
+        decay_timesteps = 4 * int(_namespace.entropy_coeff_decay * _namespace.max_iterations) * train_batch_size
+        entropy_coeff_schedule = [(0, max(_namespace.entropy_coeff)), (decay_timesteps, min(_namespace.entropy_coeff))]
+    else:
+        raise ValueError('Expected 1 (constant) or 2 (initial and final) values for'
+                         ' the entropy coefficient hyperparamter, but found {}'.format(_namespace.entropy_coeff))
+
     return tune.run(
         run_or_experiment=PPOTrainer,
         config={
@@ -324,8 +335,9 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             },
 
             'lr': _namespace.lr,
-            "entropy_coeff": _namespace.entropy_coeff,
+            "entropy_coeff": entropy_coeff,
             'vf_loss_coeff': _namespace.vf_loss_coeff,
+            'entropy_coeff_schedule': entropy_coeff_schedule,
 
             # Continuing Task settings
             'gamma': _namespace.gamma,
@@ -398,8 +410,10 @@ if __name__ == '__main__':
     parser.add_argument('--minibatch-size', type=int, default=2048, help='The sgd minibatch size')
     parser.add_argument('--batch-size', type=int, default=102_400, help='The sgd minibatch size')
     parser.add_argument('--num-sgd-iter', type=int, default=32, help='The number of sgd iterations per training step')
-    parser.add_argument('--entropy-coeff', type=float, default=1.5e-3,
+    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[1.5e-3, 50 * 1.5e-3],
                         help='The weight to the entropy coefficient in the loss function')
+    parser.add_argument('--entropy-coeff-decay', type=float, default=.8,
+                        help='The initial weight to the entropy coefficient in the loss function')
     parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
     parser.add_argument('--lambda', type=float, default=.9, help='The eligibility trace')
     parser.add_argument('--vf-loss-coeff', type=float, default=1.,
@@ -414,8 +428,8 @@ if __name__ == '__main__':
     parser.add_argument('--self-play', action='store_true', help='Train the agent through self-play')
 
     # miscellaneous
-    parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
-    parser.add_argument('--max-iterations', type=int, default=170, help='The maximum number of training iterations')
+    parser.add_argument('--stop', type=float, default=.15, help='The policy entropy value which training stops')
+    parser.add_argument('--max-iterations', type=int, default=510, help='The maximum number of training iterations')
 
     # debugging
     parser.add_argument('--debugging', action='store_true', help='Run locally with simplified settings')
