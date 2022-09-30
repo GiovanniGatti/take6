@@ -22,6 +22,7 @@ from ray.rllib.policy.policy import PolicySpec
 from ray.rllib.utils.framework import try_import_tf
 from ray.rllib.utils.typing import Dict
 from ray.tune.analysis import experiment_analysis
+from ray.tune.utils import log
 
 from take6 import env, model, policy
 from take6.aztools import checkpoint
@@ -284,7 +285,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         num_sgd_iter = _namespace.num_sgd_iter
         framework = 'tf'
         local_dir = './logs/ray-results'
-        evaluation_duration = 256
+        evaluation_duration = 160
 
     train_batch_size = num_workers * num_envs_per_worker * 10
 
@@ -386,6 +387,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                            r['training_iteration'] >= _namespace.max_iterations),
         checkpoint_at_end=True,
         raise_on_failed_trial=False,
+        verbose=log.Verbosity.V1_EXPERIMENT,
         local_dir=local_dir)
 
 
