@@ -22,7 +22,7 @@ def load_checkpoint_from(run_id: str, checkpoint: int, target_dir: str = tempfil
     return str(pathlib.Path(target_dir, parent, checkpoint_id))
 
 
-def retrieve_metrics(run_id: str) -> None:
+def retrieve_metrics(run_id: str, checkpoint: int) -> None:
     ws = workspace.get_workspace()
     run = core.Run.get(ws, run_id)
     current_run = core.Run.get_context()
@@ -37,6 +37,7 @@ def retrieve_metrics(run_id: str) -> None:
 
     metrics = run.get_metrics()
     for k, v in metrics.items():
+        v = v[:checkpoint]
         for chunk in chunks(v, max(1, math.ceil(len(v) / 250))):  # see https://aka.ms/azure-machine-learning-limits
             current_run.log_list(name=k, value=chunk)
 

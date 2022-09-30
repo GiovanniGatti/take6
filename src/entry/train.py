@@ -12,7 +12,6 @@ import ray
 import trueskill
 from azureml import core
 from ray import tune, rllib
-from ray.rllib.agents.ppo import PPOTrainer
 from ray.rllib.algorithms import algorithm, callbacks
 from ray.rllib.evaluation import worker_set
 from ray.rllib.evaluation.metrics import collect_episodes, summarize_episodes
@@ -23,7 +22,7 @@ from ray.rllib.utils.typing import Dict
 from ray.tune.analysis import experiment_analysis
 from ray.tune.utils import log
 
-from take6 import env, model, policy
+from take6 import env, model, policy, ppo
 from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
@@ -309,7 +308,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                          ' the entropy coefficient hyperparamter, but found {}'.format(_namespace.entropy_coeff))
 
     return tune.run(
-        run_or_experiment=PPOTrainer,
+        run_or_experiment=ppo.TimedPPO,
         config={
             # Training settings
             'env': 'take6',
@@ -392,6 +391,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                            r['training_iteration'] >= _namespace.max_iterations),
         checkpoint_at_end=True,
         raise_on_failed_trial=False,
+        max_failures=100,
         verbose=log.Verbosity.V1_EXPERIMENT,
         local_dir=local_dir)
 
