@@ -396,7 +396,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                            r['training_iteration'] >= _namespace.max_iterations),
         checkpoint_at_end=True,
         raise_on_failed_trial=False,
-        max_failures=100,
+        max_failures=10,
         verbose=log.Verbosity.V1_EXPERIMENT,
         local_dir=local_dir)
 
