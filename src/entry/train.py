@@ -91,7 +91,8 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             ratings = result['evaluation']['custom_metrics']['trueskill']
 
             print('=== training iteration {} ==='.format(result['training_iteration']))
-            print(json.dumps({k: 'Rating(mu={:.3f}, sigma={:.3f})'.format(r.mu, r.sigma) for k, r in ratings.items()},
+            print(json.dumps({k: 'Rating(mu={:.3f}, sigma={:.3f}) / mmr={:.0f}'
+                             .format(r.mu, r.sigma, 10 * (r.mu - 3 * r.sigma)) for k, r in ratings.items()},
                              indent=2, sort_keys=True))
 
             _learner = ratings['learner']
