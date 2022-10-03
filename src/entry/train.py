@@ -87,6 +87,7 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _run.log(name='eval/win_rate', value=result['evaluation']['custom_metrics']['eval_win_rate'])
 
             ratings = result['evaluation']['custom_metrics']['trueskill']
+            print(ratings)
             _learner = ratings['learner']
             _opponent_v0 = ratings['opponent_v0']
             _opponent_mmr = 10 * (_opponent_v0.mu - 3 * _opponent_v0.sigma)
