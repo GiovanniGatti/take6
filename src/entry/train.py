@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import multiprocessing
 import pathlib
@@ -88,7 +89,7 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _run.log(name='eval/ties_rate', value=result['evaluation']['custom_metrics']['eval_ties'])
 
             ratings = result['evaluation']['custom_metrics']['trueskill']
-            print(ratings)
+            print(json.dumps(ratings, indent=2, sort_keys=True))
             _learner = ratings['learner']
             _opponent_v0 = ratings['opponent_v0']
             _opponent_mmr = 10 * (_opponent_v0.mu - 3 * _opponent_v0.sigma)
@@ -419,11 +420,11 @@ if __name__ == '__main__':
     parser.add_argument('--minibatch-size', type=int, default=2048, help='The sgd minibatch size')
     parser.add_argument('--batch-size', type=int, default=102_400, help='The sgd minibatch size')
     parser.add_argument('--num-sgd-iter', type=int, default=32, help='The number of sgd iterations per training step')
-    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[1.5e-3, 50 * 1.5e-3],
+    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[7.5e-4, 7.5e-2],
                         help='The weight to the entropy coefficient in the loss function')
-    parser.add_argument('--entropy-coeff-decay', type=float, default=.8,
+    parser.add_argument('--entropy-coeff-decay', type=float, default=.7,
                         help='The initial weight to the entropy coefficient in the loss function')
-    parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
+    parser.add_argument('--gamma', type=float, default=.95, help='The discount rate')
     parser.add_argument('--lambda', type=float, default=.9, help='The eligibility trace')
     parser.add_argument('--vf-loss-coeff', type=float, default=1.,
                         help='The value loss coefficient (optimize it if actor and critic share layers)')
@@ -438,7 +439,7 @@ if __name__ == '__main__':
 
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.15, help='The policy entropy value which training stops')
-    parser.add_argument('--max-iterations', type=int, default=510, help='The maximum number of training iterations')
+    parser.add_argument('--max-iterations', type=int, default=600, help='The maximum number of training iterations')
 
     # debugging
     parser.add_argument('--debugging', action='store_true', help='Run locally with simplified settings')
