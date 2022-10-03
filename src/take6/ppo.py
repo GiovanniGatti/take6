@@ -26,9 +26,9 @@ class TimedPPO(ppo.PPO):
     def step(self) -> ResultDict:
         if self._timesteps_total and not self._loaded:
             # in case of recovering from checkpoint
-            self._loaded = True
-            self._counters[NUM_AGENT_STEPS_SAMPLED] = self._timesteps_total
+            self._num_agent_steps_sampled = self._counters[NUM_AGENT_STEPS_SAMPLED] = self._timesteps_total
             self.workers.sync_weights(global_vars={'timestep': self._timesteps_total})
+        self._loaded = True
         _result = super().step()
         num_agent_steps_sampled = _result[NUM_AGENT_STEPS_SAMPLED]
         _result[result.TIMESTEPS_THIS_ITER] = num_agent_steps_sampled - self._num_agent_steps_sampled
