@@ -85,6 +85,7 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _run.log(name='eval/weighted_classification',
                      value=result['evaluation']['custom_metrics']['eval_weighted_classification'])
             _run.log(name='eval/win_rate', value=result['evaluation']['custom_metrics']['eval_win_rate'])
+            _run.log(name='eval/ties_rate', value=result['evaluation']['custom_metrics']['eval_ties'])
 
             ratings = result['evaluation']['custom_metrics']['trueskill']
             print(ratings)
@@ -178,7 +179,7 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
 def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
     if not hasattr(_algorithm, 'ratings'):
         # see https://trueskill.info/help.html
-        trueskill.setup(mu=25., sigma=25. / 3, beta=20.8, tau=25. / 100, draw_probability=0.9)
+        trueskill.setup(mu=25., sigma=25. / 3, beta=20.8, tau=25. / 100, draw_probability=0.18)
         _algorithm.ratings = defaultdict(lambda: trueskill.Rating())
 
     def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
@@ -224,6 +225,7 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 
     episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
 
+    ties = 0
     for episode in episodes:
         ratings = []
         scores = []
@@ -238,6 +240,7 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         classification = np.zeros(num_players)
         classification[np.argsort(scores)] = np.arange(num_players)[::-1]
         s, c = np.unique(scores, return_counts=True)
+        ties += np.sum(c > 1)
         for _s in s[c > 1]:  # handle ties
             classification[scores == _s] = np.min(classification[scores == _s])
         new_ratings = trueskill.rate(ratings, ranks=list(classification))
@@ -258,6 +261,7 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     custom_metrics['eval_score_rate'] = np.mean(custom_metrics['score'])
     custom_metrics['eval_relative_score'] = np.mean(custom_metrics['relative_score'])
     custom_metrics['eval_weighted_classification'] = np.mean(custom_metrics['weighted_classification'])
+    custom_metrics['eval_ties'] = ties / len(episodes)
 
     return metrics
 
