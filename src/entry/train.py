@@ -89,7 +89,11 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _run.log(name='eval/ties_rate', value=result['evaluation']['custom_metrics']['eval_ties'])
 
             ratings = result['evaluation']['custom_metrics']['trueskill']
-            print(dict(json.dumps(ratings, indent=2, sort_keys=True)))
+
+            print('=== training iteration {} ==='.format(result['training_iteration']))
+            print(json.dumps({k: 'Rating(mu={:.3f}, sigma={:.3f})'.format(r.mu, r.sigma) for k, r in ratings.items()},
+                             indent=2, sort_keys=True))
+
             _learner = ratings['learner']
             _opponent_v0 = ratings['opponent_v0']
             _opponent_mmr = 10 * (_opponent_v0.mu - 3 * _opponent_v0.sigma)
