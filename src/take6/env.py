@@ -236,7 +236,8 @@ class Take6(GroupedActionMultiEnv):
         rwd = {i: round_scores[i] for i in range(self._table.num_players)}
         done = {i: _done for i in range(self._table.num_players)}
         done['__all__'] = _done
-        return obs, rwd, done, {i: {'score': self._scoreboard.scores[i]} for i in range(self._table.num_players)}
+        return obs, rwd, done, {i: {'score': self._scoreboard.scores[i], 'played_card': played_cards[i]}
+                                for i in range(self._table.num_players)}
 
     def reset(self) -> MultiAgentDict:
         stacks, self._hands = self._deck.distribute(self._table.num_players)
@@ -371,7 +372,8 @@ class PlayedCardsWrapper(GroupedActionMultiEnv):
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
         obs, rwd, done, info = self._env.step(action_dict)
-        self._history[self._table.rows.flatten() - 1] = 1
+        played_cards = np.array([info[i]['played_card'] for i in range(self._table.num_players)])
+        self._history[played_cards - 1] += 1
         for _obs in obs.values():
             _obs['real_obs'] = (*_obs['real_obs'], self._history)
         return obs, rwd, done, info
