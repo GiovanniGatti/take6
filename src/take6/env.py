@@ -73,9 +73,9 @@ class Table:
                 idx = np.argmax(stack_scores)
 
                 ties = stack_scores == stack_scores[idx]
-                if np.sum(ties) > 1:  # tie break
-                    lowest = np.min(highest_cards[ties])
-                    idx = np.nonzero(highest_cards == lowest)[0]
+                if np.sum(ties) > 1:  # tie-break
+                    highest = np.max(highest_cards[ties])
+                    idx = np.nonzero(highest_cards == highest)[0]
 
                 scores[i] = stack_scores[idx]
                 self._rows[idx, :] = 0
