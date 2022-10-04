@@ -427,13 +427,13 @@ if __name__ == '__main__':
     parser.add_argument('--num-sgd-iter', type=int, default=32, help='The number of sgd iterations per training step')
     parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[7.5e-4, 7.5e-2],
                         help='The weight to the entropy coefficient in the loss function')
-    parser.add_argument('--entropy-coeff-decay', type=float, default=.7,
+    parser.add_argument('--entropy-coeff-decay', type=float, default=.6,
                         help='The initial weight to the entropy coefficient in the loss function')
-    parser.add_argument('--gamma', type=float, default=.95, help='The discount rate')
-    parser.add_argument('--lambda', type=float, default=.9, help='The eligibility trace')
+    parser.add_argument('--gamma', type=float, default=.9, help='The discount rate')
+    parser.add_argument('--lambda', type=float, default=.95, help='The eligibility trace')
     parser.add_argument('--vf-loss-coeff', type=float, default=1.,
                         help='The value loss coefficient (optimize it if actor and critic share layers)')
-    parser.add_argument('--lr', type=float, default=6e-6, help='The learning rate')
+    parser.add_argument('--lr', type=float, default=1e-6, help='The learning rate')
     parser.add_argument('--rwd-fn', type=str, default='raw-score',
                         choices=['raw-score', 'proportional-score', 'classification'],
                         help='The reward signal to use')
@@ -444,7 +444,7 @@ if __name__ == '__main__':
 
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
-    parser.add_argument('--max-iterations', type=int, default=600, help='The maximum number of training iterations')
+    parser.add_argument('--max-iterations', type=int, default=700, help='The maximum number of training iterations')
 
     # debugging
     parser.add_argument('--debugging', action='store_true', help='Run locally with simplified settings')
