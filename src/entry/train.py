@@ -443,7 +443,7 @@ if __name__ == '__main__':
     parser.add_argument('--self-play', action='store_true', help='Train the agent through self-play')
 
     # miscellaneous
-    parser.add_argument('--stop', type=float, default=.15, help='The policy entropy value which training stops')
+    parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
     parser.add_argument('--max-iterations', type=int, default=600, help='The maximum number of training iterations')
 
     # debugging
