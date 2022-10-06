@@ -3,6 +3,7 @@ import json
 import math
 import multiprocessing
 import pathlib
+import random
 import sys
 import tempfile
 from collections import defaultdict
@@ -27,6 +28,23 @@ from take6 import env, model, policy, ppo
 from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
+
+POLICY_BUFFER_SIZE = 10
+
+
+def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
+    if agent_id == 0:
+        return 'learner'
+    _current_policies = list(worker.policy_map.keys())
+    _policy_ids = [int(p.replace('opponent_v', ''))
+                   for p in _current_policies if p not in ('learner', 'random')]
+
+    # keep only latest POLICY_BUFFER_SIZE policies
+    _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
+    if len(_policies_to_sample) < POLICY_BUFFER_SIZE:
+        _policies_to_sample.append('random')
+
+    return random.choice(_policies_to_sample)
 
 
 class TrackingCallback(callbacks.DefaultCallbacks):
@@ -96,16 +114,16 @@ class TrackingCallback(callbacks.DefaultCallbacks):
                              indent=2, sort_keys=True))
 
             _learner = ratings['learner']
-            _opponent_v0 = ratings['opponent_v0']
-            _opponent_mmr = 10 * (_opponent_v0.mu - 3 * _opponent_v0.sigma)
+            _random = ratings['random']
+            _opponent_mmr = 10 * (_random.mu - 3 * _random.sigma)
             _learner_mmr = 10 * (_learner.mu - 3 * _learner.sigma)
             _run.log(name='eval/mu', value=_learner.mu)
             _run.log(name='eval/sigma', value=_learner.sigma)
             _run.log(name='eval/mmr', value=_learner_mmr)
-            _run.log(name='eval/quality', value=trueskill.quality_1vs1(_learner, _opponent_v0))
-            _run.log(name='eval/opponent_v0_mu', value=_opponent_v0.mu)
-            _run.log(name='eval/opponent_v0_sigma', value=_opponent_v0.sigma)
-            _run.log(name='eval/opponent_v0_mmr', value=_opponent_mmr)
+            _run.log(name='eval/quality', value=trueskill.quality_1vs1(_learner, _random))
+            _run.log(name='eval/random_mu', value=_random.mu)
+            _run.log(name='eval/random_sigma', value=_random.sigma)
+            _run.log(name='eval/random_mmr', value=_opponent_mmr)
             _run.log(name='eval/relative_mmr', value=_learner_mmr - _opponent_mmr)
 
 
@@ -143,43 +161,34 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['relative_score'] = result['custom_metrics']['relative_score_mean']
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
-        current_opponent = len(trainer.workers.local_worker().policy_dict) - 1
+        current_policies = list(trainer.workers.local_worker().policy_map.keys())
 
         if trainer.iteration > 0 and trainer.iteration % 20 == 0 and namespace.self_play:
-            def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
-                if agent_id == 0:
-                    # I haven't found anyway to know which policies were
-                    # already selected between two calls of this function.
-                    # The workaround I found was to store this temporary
-                    # information in the user_data section of the episode.
-                    num_opponents = len(worker.policy_dict) - 1
-                    num_players = worker.policy_config['env_config']['num-players']
-
-                    # ~90% chance of picking one of the last 5 policies
-                    # which represents the last 5 * 20 = 100 training iterations
-                    weights = np.arange(num_opponents)[::-1] / 2
-                    weights = np.exp(-weights) / np.sum(np.exp(-weights))
-
-                    _ids = np.random.choice(num_opponents, size=num_players - 1, p=weights, replace=False)
-                    episode.user_data['selected_policies_id'] = _ids
-                    return 'learner'
-
-                return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
-
-            new_pol_id = f'opponent_v{current_opponent}'
+            trained_policies = [p for p in current_policies if p not in ('learner', 'random')]
+            latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in trained_policies) \
+                if trained_policies else 0
+            new_pol_id = f'opponent_v{latest_opponent + 1}'
+            current_policies.append(new_pol_id)
+            trained_policies.append(new_pol_id)
             new_policy = trainer.add_policy(
                 policy_id=new_pol_id,
                 policy_cls=type(trainer.get_policy('learner')),
-                policy_mapping_fn=policy_mapping_fn,
             )
-
             main_state = trainer.get_policy('learner').get_state()
             new_policy.set_state(main_state)
             trainer.workers.sync_weights()
 
-            current_opponent += 1
+            # storing at least 1 policy more than needed otherwise
+            # RLLib may fail to find policy when rolling out already existing episodes
+            if len(trained_policies) > POLICY_BUFFER_SIZE + 1:
+                _ids = [int(_id.replace('opponent_v', ''))
+                        for _id in current_policies if _id not in ('learner', 'random')]
+                to_remove = ['opponent_v{}'.format(_id) for _id in sorted(_ids)[:-(POLICY_BUFFER_SIZE + 1)]]
+                for policy_id in to_remove:
+                    trainer.remove_policy(policy_id)
+                    current_policies.remove(policy_id)
 
-        result['league_size'] = current_opponent
+        result['league_size'] = len(current_policies) - 2
 
 
 def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
@@ -190,13 +199,29 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 
     def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
         if agent_id == 0:
+            # Differently than during training, we don't want to "repeat"
+            # policies during episodes (so to correctly compute MMR; the only
+            # exception will be the random policy).
+            # Unfortunately, I haven't found anyway to know which policies were
+            # already selected between two calls of this function.
+            # The workaround I found was to store this temporary
+            # information in the user_data section of the episode.
             episode.user_data['selected_policies_id'] = []
-            num_policies = len(worker.policy_map) - 1
             num_players = worker.policy_config['env_config']['num-players']
-            _ids = np.random.choice(num_policies, size=num_players - 1, replace=False)
-            episode.user_data['selected_policies_id'] = _ids
+
+            _current_policies = list(worker.policy_map.keys())
+            _policy_ids = [int(p.replace('opponent_v', ''))
+                           for p in _current_policies if p not in ('learner', 'random')]
+
+            # keep only latest POLICY_BUFFER_SIZE policies
+            _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
+            _policies_to_sample.append('random')
+            _policies_to_sample += ['random', ] * (num_players - len(_policies_to_sample))
+
+            episode.user_data['selected_policies_id'] = np.random.choice(
+                _policies_to_sample, size=num_players - 1, replace=False)
             return 'learner'
-        return 'opponent_v{}'.format(episode.user_data['selected_policies_id'][agent_id - 1])
+        return episode.user_data['selected_policies_id'][agent_id - 1]
 
     eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
 
@@ -213,7 +238,7 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         eval_workers = _algorithm.evaluation_workers
 
         def _fn(worker: rllib.RolloutWorker, _policies_to_add: List[Tuple[str, Type[rllib.Policy]]]) -> None:
-            known_policies = worker.policy_dict.keys()
+            known_policies = worker.policy_map.keys()
             for _id, _t in _policies_to_add:
                 if _id not in known_policies:
                     worker.add_policy(
@@ -222,10 +247,9 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
                         policy_mapping_fn=eval_policy_mapping_fn,
                     )
 
-        policies = [(k, type(local.get_policy(k))) for k, v in local.policy_dict.items()]
+        policies = [(k, type(local.get_policy(k))) for k, v in local.policy_map.items()]
         eval_workers.foreach_worker(lambda w: _fn(w, policies))
-        policies_to_sync = [
-            k for k in local.policy_dict.keys() if k not in ('opponent_v0', 'opponent_v1', 'opponent_v2')]
+        policies_to_sync = [k for k in local.policy_map.keys() if k != 'random']
         eval_workers.sync_weights(policies_to_sync, local)
         return evaluation(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
 
@@ -252,9 +276,6 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         new_ratings = trueskill.rate(ratings, ranks=list(classification))
 
         episode.custom_metrics['win'] = classification[0] == 0
-
-        assert np.unique(players).shape[0] == num_players, \
-            'Repeated versions of a policy are playing within the same match'
 
         for i, p in enumerate(players):
             (_algorithm.ratings[p],) = new_ratings[i]
@@ -308,10 +329,6 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     ModelCatalog.register_custom_model('take6', model.Take6Model)
     tune.register_env('take6', env.take6)
 
-    def warmup_agent_mapping(agent_id, episode, worker, **kwargs) -> str:
-        return 'learner' if agent_id == 0 else \
-            'opponent_v{}'.format(agent_id - 1)
-
     entropy_coeff_schedule = None
     if len(_namespace.entropy_coeff) == 1:
         entropy_coeff = _namespace.entropy_coeff[0]
@@ -323,12 +340,6 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     else:
         raise ValueError('Expected 1 (constant) or 2 (initial and final) values for'
                          ' the entropy coefficient hyperparamter, but found {}'.format(_namespace.entropy_coeff))
-
-    # Our main policy, we'd like to optimize.
-    policies = {'learner': PolicySpec(None, None, None, None), }
-    for i in range(_namespace.num_players):
-        # Warmup policies.
-        policies['opponent_v{}'.format(i)] = PolicySpec(policy.RandomPolicy, None, None, {})
 
     return tune.run(
         run_or_experiment=ppo.TimedPPO,
@@ -363,8 +374,13 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'lambda': vars(_namespace)['lambda'],
 
             'multiagent': {
-                'policies': policies,
-                'policy_mapping_fn': warmup_agent_mapping,
+                'policies': {
+                    # Our main policy, we'd like to optimize.
+                    'learner': PolicySpec(None, None, None, None),
+                    # warmup policy
+                    'random': PolicySpec(policy.RandomPolicy, None, None, {})
+                },
+                'policy_mapping_fn': policy_mapping_fn,
                 'policies_to_train': ['learner'],
             },
 
@@ -442,6 +458,9 @@ if __name__ == '__main__':
                         help='Add history of played cards to agent\'s observations')
     parser.add_argument('--self-play', action='store_true', help='Train the agent through self-play')
 
+    parser.add_argument('--policy-buffer-size', type=int,
+                        help='The number of historical policies to use during self-play')
+
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
     parser.add_argument('--max-iterations', type=int, default=700, help='The maximum number of training iterations')
@@ -461,6 +480,9 @@ if __name__ == '__main__':
         run.tag('baseline', 'True')
 
     ray.init(local_mode=namespace.debugging)
+
+    if namespace.policy_buffer_size:
+        POLICY_BUFFER_SIZE = namespace.policy_buffer_size
 
     tmp_dir = tempfile.mkdtemp()
     analysis = main(namespace, tmp_dir)
