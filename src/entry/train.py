@@ -317,7 +317,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         num_sgd_iter = _namespace.num_sgd_iter
         framework = 'tf'
         local_dir = './logs/ray-results'
-        evaluation_duration = 160
+        evaluation_duration = 400
 
     train_batch_size = num_workers * num_envs_per_worker * 10
 
