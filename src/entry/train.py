@@ -440,7 +440,7 @@ if __name__ == '__main__':
     parser.add_argument('--minibatch-size', type=int, default=2048, help='The sgd minibatch size')
     parser.add_argument('--batch-size', type=int, default=102_400, help='The sgd minibatch size')
     parser.add_argument('--num-sgd-iter', type=int, default=32, help='The number of sgd iterations per training step')
-    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[7.5e-4, 7.5e-2],
+    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[7.5e-4, 6e-2],
                         help='The weight to the entropy coefficient in the loss function')
     parser.add_argument('--entropy-coeff-decay', type=int, default=420,
                         help='The number of training iterations to decay the entropy coefficient')
