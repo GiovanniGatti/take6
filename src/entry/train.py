@@ -334,8 +334,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         entropy_coeff = _namespace.entropy_coeff[0]
     elif len(_namespace.entropy_coeff) == 2:
         entropy_coeff = max(_namespace.entropy_coeff)
-        final_decay_it = int(_namespace.entropy_coeff_decay * _namespace.max_iterations)
-        decay_timesteps = _namespace.num_players * train_batch_size * final_decay_it
+        decay_timesteps = _namespace.num_players * train_batch_size * _namespace.entropy_coeff_decay
         entropy_coeff_schedule = [(0, max(_namespace.entropy_coeff)), (decay_timesteps, min(_namespace.entropy_coeff))]
     else:
         raise ValueError('Expected 1 (constant) or 2 (initial and final) values for'
@@ -443,8 +442,8 @@ if __name__ == '__main__':
     parser.add_argument('--num-sgd-iter', type=int, default=32, help='The number of sgd iterations per training step')
     parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[7.5e-4, 7.5e-2],
                         help='The weight to the entropy coefficient in the loss function')
-    parser.add_argument('--entropy-coeff-decay', type=float, default=.6,
-                        help='The initial weight to the entropy coefficient in the loss function')
+    parser.add_argument('--entropy-coeff-decay', type=int, default=420,
+                        help='The number of training iterations to decay the entropy coefficient')
     parser.add_argument('--gamma', type=float, default=.9, help='The discount rate')
     parser.add_argument('--lambda', type=float, default=.95, help='The eligibility trace')
     parser.add_argument('--vf-loss-coeff', type=float, default=1.,
