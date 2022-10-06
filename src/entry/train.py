@@ -37,7 +37,7 @@ def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
         return 'learner'
     _current_policies = list(worker.policy_map.keys())
     _policy_ids = [int(p.replace('opponent_v', ''))
-                   for p in _current_policies if p not in ('learner', 'random')]
+                   for p in _current_policies if p not in ('learner', 'random') and not p.startswith('random_')]
 
     # keep only latest POLICY_BUFFER_SIZE policies
     _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
@@ -164,7 +164,8 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         current_policies = list(trainer.workers.local_worker().policy_map.keys())
 
         if trainer.iteration > 0 and trainer.iteration % 20 == 0 and namespace.self_play:
-            trained_policies = [p for p in current_policies if p not in ('learner', 'random')]
+            trained_policies = [p for p in current_policies
+                                if p not in ('learner', 'random') and not p.startswith('random_')]
             latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in trained_policies) \
                 if trained_policies else 0
             new_pol_id = f'opponent_v{latest_opponent + 1}'
@@ -181,8 +182,8 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
             # storing at least 1 policy more than needed otherwise
             # RLLib may fail to find policy when rolling out already existing episodes
             if len(trained_policies) > POLICY_BUFFER_SIZE + 1:
-                _ids = [int(_id.replace('opponent_v', ''))
-                        for _id in current_policies if _id not in ('learner', 'random')]
+                _ids = [int(_id.replace('opponent_v', '')) for _id in current_policies
+                        if _id not in ('learner', 'random') and not _id.startswith('random_')]
                 to_remove = ['opponent_v{}'.format(_id) for _id in sorted(_ids)[:-(POLICY_BUFFER_SIZE + 1)]]
                 for policy_id in to_remove:
                     trainer.remove_policy(policy_id)
@@ -200,8 +201,7 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
         if agent_id == 0:
             # Differently than during training, we don't want to "repeat"
-            # policies during episodes (so to correctly compute MMR; the only
-            # exception will be the random policy).
+            # policies during episodes (so to correctly compute MMR).
             # Unfortunately, I haven't found anyway to know which policies were
             # already selected between two calls of this function.
             # The workaround I found was to store this temporary
@@ -210,13 +210,13 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
             num_players = worker.policy_config['env_config']['num-players']
 
             _current_policies = list(worker.policy_map.keys())
-            _policy_ids = [int(p.replace('opponent_v', ''))
-                           for p in _current_policies if p not in ('learner', 'random')]
+            _policy_ids = [int(p.replace('opponent_v', '')) for p in _current_policies
+                           if p not in ('learner', 'random') and not p.startswith('random_')]
 
             # keep only latest POLICY_BUFFER_SIZE policies
             _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
             _policies_to_sample.append('random')
-            _policies_to_sample += ['random', ] * (num_players - len(_policies_to_sample))
+            _policies_to_sample += ['random_{}'.format(i) for i in range(num_players - len(_policies_to_sample))]
 
             episode.user_data['selected_policies_id'] = np.random.choice(
                 _policies_to_sample, size=num_players - 1, replace=False)
@@ -276,6 +276,9 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         new_ratings = trueskill.rate(ratings, ranks=list(classification))
 
         episode.custom_metrics['win'] = classification[0] == 0
+
+        assert np.unique(players).shape[0] == num_players, \
+            'Repeated versions of a policy are playing within the same match'
 
         for i, p in enumerate(players):
             (_algorithm.ratings[p],) = new_ratings[i]
@@ -340,6 +343,19 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         raise ValueError('Expected 1 (constant) or 2 (initial and final) values for'
                          ' the entropy coefficient hyperparamter, but found {}'.format(_namespace.entropy_coeff))
 
+    policies = {
+        # Our main policy, we'd like to optimize.
+        'learner': PolicySpec(None, None, None, None),
+        # warmup policy
+        'random': PolicySpec(policy.RandomPolicy, None, None, {})
+    }
+
+    for i in range(10):
+        # Add 10 more random policies. This is only useful for
+        # during policy evaluation (to avoid repetition of the
+        # random policy in the rankings)
+        policies['random_{}'.format(i)] = PolicySpec(policy.RandomPolicy, None, None, {})
+
     return tune.run(
         run_or_experiment=ppo.TimedPPO,
         config={
@@ -373,12 +389,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'lambda': vars(_namespace)['lambda'],
 
             'multiagent': {
-                'policies': {
-                    # Our main policy, we'd like to optimize.
-                    'learner': PolicySpec(None, None, None, None),
-                    # warmup policy
-                    'random': PolicySpec(policy.RandomPolicy, None, None, {})
-                },
+                'policies': policies,
                 'policy_mapping_fn': policy_mapping_fn,
                 'policies_to_train': ['learner'],
             },
