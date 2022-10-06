@@ -218,7 +218,7 @@ class Take6(GroupedActionMultiEnv):
 
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
-        played_cards = np.array([self._hands[i].select(a) for i, a in action_dict.items()])
+        played_cards = np.array([self._hands[i].select(action_dict[i]) for i in range(self._table.num_players)])
         assert np.alltrue(played_cards >= 1)
         assert np.alltrue(played_cards <= 104)
 
