@@ -162,10 +162,10 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
         current_policies = list(trainer.workers.local_worker().policy_map.keys())
+        trained_policies = [p for p in current_policies
+                            if p not in ('learner', 'random') and not p.startswith('random_')]
 
         if trainer.iteration > 0 and trainer.iteration % 20 == 0 and namespace.self_play:
-            trained_policies = [p for p in current_policies
-                                if p not in ('learner', 'random') and not p.startswith('random_')]
             latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in trained_policies) \
                 if trained_policies else 0
             new_pol_id = f'opponent_v{latest_opponent + 1}'
@@ -189,7 +189,7 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
                     trainer.remove_policy(policy_id)
                     current_policies.remove(policy_id)
 
-        result['league_size'] = len(current_policies) - 2
+        result['league_size'] = len(trained_policies)
 
 
 def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
