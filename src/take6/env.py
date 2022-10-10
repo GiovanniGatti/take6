@@ -381,7 +381,7 @@ class PlayedCardsWrapper(GroupedActionMultiEnv):
             'Some cards are being repeated history={}, played_cards={}'.format(self._history, played_cards)
         self._history[played_cards - 1] = 1
         for _obs in obs.values():
-            _obs['real_obs'] = (*_obs['real_obs'], self._history)
+            _obs['real_obs'] = (*_obs['real_obs'], np.copy(self._history))
         return obs, rwd, done, info
 
     def reset(self) -> MultiAgentDict:
@@ -391,7 +391,7 @@ class PlayedCardsWrapper(GroupedActionMultiEnv):
         flattened = flattened[flattened > 0]
         self._history[flattened - 1] = 1
         for _obs in obs.values():
-            _obs['real_obs'] = (*_obs['real_obs'], self._history)
+            _obs['real_obs'] = (*_obs['real_obs'], np.copy(self._history))
         return obs
 
     def render(self, mode=None) -> None:
