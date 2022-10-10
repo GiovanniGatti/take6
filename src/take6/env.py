@@ -231,13 +231,15 @@ class Take6(GroupedActionMultiEnv):
         self._scoreboard += round_scores
 
         table_enc = self._table.encode()
-        obs = {i: {'action_mask': self._hands[i].mask(), 'real_obs': (self._hands[i].encode(), table_enc)}
-               for i in range(self._table.num_players)}
-        rwd = {i: round_scores[i] for i in range(self._table.num_players)}
-        done = {i: _done for i in range(self._table.num_players)}
+        obs, rwd, done, info = {}, {}, {}, {}
+        for i in range(self._table.num_players):
+            obs[i] = {'action_mask': self._hands[i].mask(), 'real_obs': (self._hands[i].encode(), table_enc)}
+            rwd[i] = round_scores[i]
+            done[i] = _done
+            info[i] = {'score': self._scoreboard.scores[i], 'played_card': played_cards[i]}
         done['__all__'] = _done
-        return obs, rwd, done, {i: {'score': self._scoreboard.scores[i], 'played_card': played_cards[i]}
-                                for i in range(self._table.num_players)}
+
+        return obs, rwd, done, info
 
     def reset(self) -> MultiAgentDict:
         stacks, self._hands = self._deck.distribute(self._table.num_players)
