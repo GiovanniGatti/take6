@@ -331,6 +331,7 @@ class ScoreWrapper(GroupedActionMultiEnv):
         self._scoreboard = scoreboard
         self.action_space = _env.action_space
         self.observation_space = _env.observation_space
+        self._indexes = np.arange(_env.num_players)
 
         self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'], scoreboard.enc_space()))
 
@@ -345,8 +346,9 @@ class ScoreWrapper(GroupedActionMultiEnv):
 
     def observation(self, obs: MultiAgentDict) -> MultiAgentDict:
         enc_score = self._scoreboard.encode()
-        for _obs in obs.values():
-            _obs['real_obs'] = (*_obs['real_obs'], enc_score)
+        for i, _obs in obs.items():
+            enc = np.concatenate((np.expand_dims(enc_score[i], axis=0), enc_score[self._indexes != i]))
+            _obs['real_obs'] = (*_obs['real_obs'], enc)
         return obs
 
     def render(self, mode=None) -> None:
