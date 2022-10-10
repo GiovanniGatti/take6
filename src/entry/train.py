@@ -455,7 +455,7 @@ if __name__ == '__main__':
                         help='The weight to the entropy coefficient in the loss function')
     parser.add_argument('--entropy-coeff-decay', type=int, default=420,
                         help='The number of training iterations to decay the entropy coefficient')
-    parser.add_argument('--gamma', type=float, default=.9, help='The discount rate')
+    parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
     parser.add_argument('--lambda', type=float, default=.95, help='The eligibility trace')
     parser.add_argument('--vf-loss-coeff', type=float, default=1.,
                         help='The value loss coefficient (optimize it if actor and critic share layers)')
