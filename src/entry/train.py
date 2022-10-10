@@ -428,7 +428,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'callbacks': callbacks.MultiCallbacks([SelfPlayCallback, TrackingCallback]),
         },
         restore=_checkpoint,
-        checkpoint_freq=5,
+        checkpoint_freq=25,
         stop=lambda t, r: (r['info']['learner']['learner']['learner_stats']['entropy'] <= _namespace.stop or
                            r['training_iteration'] >= _namespace.max_iterations),
         checkpoint_at_end=True,
