@@ -29,7 +29,7 @@ from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
 
-POLICY_BUFFER_SIZE = 10
+POLICY_BUFFER_SIZE = 8
 
 
 def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
@@ -374,7 +374,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'framework': framework,
 
             'model': {
-                'fcnet_hiddens': [512, 512, 256],
+                'fcnet_hiddens': [256, 256, 64],
                 'custom_model': 'take6',
                 'fcnet_activation': 'relu',
             },
