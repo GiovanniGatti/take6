@@ -165,7 +165,7 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         trained_policies = [p for p in current_policies
                             if p not in ('learner', 'random') and not p.startswith('random_')]
 
-        if trainer.iteration > 0 and trainer.iteration % 20 == 0 and namespace.self_play:
+        if trainer.iteration > 0 and trainer.iteration % 25 == 0 and namespace.self_play:
             latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in trained_policies) \
                 if trained_policies else 0
             new_pol_id = f'opponent_v{latest_opponent + 1}'
