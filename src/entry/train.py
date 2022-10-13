@@ -7,7 +7,7 @@ import random
 import sys
 import tempfile
 from collections import defaultdict
-from typing import Any, Optional, Tuple, Type, List
+from typing import Any, Optional
 
 import numpy as np
 import ray
@@ -29,7 +29,7 @@ from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
 
-POLICY_BUFFER_SIZE = 8
+POLICY_BUFFER_SIZE = 15
 
 
 def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
@@ -41,8 +41,7 @@ def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
 
     # keep only latest POLICY_BUFFER_SIZE policies
     _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
-    if len(_policies_to_sample) < POLICY_BUFFER_SIZE:
-        _policies_to_sample.append('random')
+    _policies_to_sample.append('random')
 
     return random.choice(_policies_to_sample)
 
@@ -115,8 +114,8 @@ class TrackingCallback(callbacks.DefaultCallbacks):
 
             _learner = ratings['learner']
             _random = ratings['random']
-            _opponent_mmr = 10 * (_random.mu - 3 * _random.sigma)
-            _learner_mmr = 10 * (_learner.mu - 3 * _learner.sigma)
+            _opponent_mmr = _random.mu - 3 * _random.sigma
+            _learner_mmr = _learner.mu - 3 * _learner.sigma
             _run.log(name='eval/mu', value=_learner.mu)
             _run.log(name='eval/sigma', value=_learner.sigma)
             _run.log(name='eval/mmr', value=_learner_mmr)
@@ -229,29 +228,8 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     num_episodes = _algorithm.config['evaluation_duration']
     num_workers = len(eval_workers.remote_workers())
 
-    try:
-        for _ in range(max(1, round(num_episodes / num_workers))):
-            ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
-    except Exception:
-        local = _algorithm.workers.local_worker()
-        _, new_workers = _algorithm.evaluation_workers.recreate_failed_workers(local)
-        eval_workers = _algorithm.evaluation_workers
-
-        def _fn(worker: rllib.RolloutWorker, _policies_to_add: List[Tuple[str, Type[rllib.Policy]]]) -> None:
-            known_policies = worker.policy_map.keys()
-            for _id, _t in _policies_to_add:
-                if _id not in known_policies:
-                    worker.add_policy(
-                        policy_id=_id,
-                        policy_cls=_t,
-                        policy_mapping_fn=eval_policy_mapping_fn,
-                    )
-
-        policies = [(k, type(local.get_policy(k))) for k, v in local.policy_map.items()]
-        eval_workers.foreach_worker(lambda w: _fn(w, policies))
-        policies_to_sync = [k for k in local.policy_map.keys() if k != 'random']
-        eval_workers.sync_weights(policies_to_sync, local)
-        return evaluation(_algorithm, eval_workers)  # see https://github.com/ray-project/ray/issues/15297
+    for _ in range(max(1, round(num_episodes / num_workers))):
+        ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
 
     episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
 
@@ -317,7 +295,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         num_sgd_iter = _namespace.num_sgd_iter
         framework = 'tf'
         local_dir = './logs/ray-results'
-        evaluation_duration = 200
+        evaluation_duration = 250
 
     train_batch_size = num_workers * num_envs_per_worker * 10
 
@@ -374,14 +352,13 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'framework': framework,
 
             'model': {
-                'fcnet_hiddens': [256, 256, 64],
+                'fcnet_hiddens': [256, 256, 128, 64],
                 'custom_model': 'take6',
                 'fcnet_activation': 'relu',
             },
 
             'lr': _namespace.lr,
             "entropy_coeff": entropy_coeff,
-            'vf_loss_coeff': _namespace.vf_loss_coeff,
             'entropy_coeff_schedule': entropy_coeff_schedule,
 
             # Continuing Task settings
@@ -448,19 +425,17 @@ if __name__ == '__main__':
     parser.add_argument('--num-players', type=int, default=4, help='The number of players in the training env')
 
     # hyper-parameters
-    parser.add_argument('--minibatch-size', type=int, default=2048, help='The sgd minibatch size')
-    parser.add_argument('--batch-size', type=int, default=102_400, help='The sgd minibatch size')
-    parser.add_argument('--num-sgd-iter', type=int, default=32, help='The number of sgd iterations per training step')
-    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[7.5e-4, 4e-2],
+    parser.add_argument('--minibatch-size', type=int, default=1024, help='The sgd minibatch size')
+    parser.add_argument('--batch-size', type=int, default=307_200, help='The sgd minibatch size')
+    parser.add_argument('--num-sgd-iter', type=int, default=20, help='The number of sgd iterations per training step')
+    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[1e-2, 5e-2],
                         help='The weight to the entropy coefficient in the loss function')
-    parser.add_argument('--entropy-coeff-decay', type=int, default=420,
+    parser.add_argument('--entropy-coeff-decay', type=int, default=650,
                         help='The number of training iterations to decay the entropy coefficient')
     parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
-    parser.add_argument('--lambda', type=float, default=.95, help='The eligibility trace')
-    parser.add_argument('--vf-loss-coeff', type=float, default=1.,
-                        help='The value loss coefficient (optimize it if actor and critic share layers)')
+    parser.add_argument('--lambda', type=float, default=.1, help='The eligibility trace')
     parser.add_argument('--lr', type=float, default=1e-6, help='The learning rate')
-    parser.add_argument('--rwd-fn', type=str, default='raw-score',
+    parser.add_argument('--rwd-fn', type=str, default='proportional-score',
                         choices=['raw-score', 'proportional-score', 'classification'],
                         help='The reward signal to use')
     parser.add_argument('--with-scores', action='store_true', help='Add scores to agent\'s observations')
@@ -495,26 +470,6 @@ if __name__ == '__main__':
         POLICY_BUFFER_SIZE = namespace.policy_buffer_size
 
     tmp_dir = tempfile.mkdtemp()
-    analysis = main(namespace, tmp_dir)
-
-    while True:
-        # Re-launch trial when 'Assert agent_key not in self.agent_collectors' is bug fixed
-        # We can safely remove it when https://github.com/ray-project/ray/issues/15297 is closed.
-        relaunch = False
-        incomplete_trials = []
-        for trial in analysis.trials:
-            if trial.status == experiment_analysis.Trial.ERROR:
-                if 'assert agent_key not in self.agent_collectors' in open(trial.error_file, 'r').read():
-                    relaunch = True
-                else:
-                    incomplete_trials.append(trial)
-
-        if incomplete_trials:
-            raise tune.TuneError("Trials did not complete", incomplete_trials)
-
-        if relaunch:
-            analysis = main(namespace, tmp_dir)
-            continue
-        break
+    main(namespace, tmp_dir)
 
     sys.exit(0)

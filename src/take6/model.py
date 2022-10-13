@@ -32,21 +32,20 @@ class Take6Model(tf_modelv2.TFModelV2):
         flat_space = spaces.Box(low=0, high=1, shape=(flat_space_shape,))
 
         super().__init__(obs_space, action_space, num_outputs, model_config, name)
-        self._action_embed_model = fcnet.FullyConnectedNetwork(
-            flat_space, action_space, num_outputs, model_config, name)
+        self.internal_model = fcnet.FullyConnectedNetwork(
+            flat_space, action_space, num_outputs, model_config, name + '_internal')
 
     def forward(
             self, input_dict: Dict[str, TensorType], state: List[TensorType], seq_lens: TensorType
     ) -> Tuple[TensorType, List[TensorType]]:
         action_mask = input_dict['obs']['action_mask']
-        action_embed, _ = self._action_embed_model({
-            'obs': tf.concat(input_dict['obs']['real_obs'], axis=1)
-        })
+        logits, state = self.internal_model.forward(
+            {'obs_flat': tf.concat(input_dict['obs']['real_obs'], axis=1)}, state, seq_lens)
         inf_mask = tf.maximum(tf.math.log(action_mask), tf.float32.min)
-        return action_embed + inf_mask, state
+        return logits + inf_mask, state
 
     def value_function(self) -> TensorType:
-        return self._action_embed_model.value_function()
+        return self.internal_model.value_function()
 
     def import_from_h5(self, h5_file: str) -> None:
-        self._action_embed_model.import_from_h5(h5_file)
+        self.internal_model.import_from_h5(h5_file)
