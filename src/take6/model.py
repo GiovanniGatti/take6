@@ -22,8 +22,8 @@ class Take6Model(tf_modelv2.TFModelV2):
         original_space = obs_space.original_space if hasattr(obs_space, 'original_space') else obs_space
         real_obs_space = original_space['real_obs']
 
-        flat_space_shape_low = np.array([])
-        flat_space_shape_high = np.array([])
+        flat_space_shape_low = np.array([], dtype=np.float32)
+        flat_space_shape_high = np.array([], dtype=np.float32)
         assert isinstance(real_obs_space, spaces.Tuple)
         for s in real_obs_space.spaces:
             assert isinstance(s, spaces.Box)
