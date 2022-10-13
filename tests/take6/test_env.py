@@ -36,7 +36,7 @@ class TestTable:
               [7, 0, 0, 0, 0],
               [14, 0, 0, 0, 0],
               [15, 0, 0, 0, 0]],
-             -11),
+             11),
 
             # clean highest
             ([[2, 0, 0, 0, 0],
@@ -48,7 +48,7 @@ class TestTable:
               [7, 0, 0, 0, 0],
               [1, 0, 0, 0, 0],
               [15, 0, 0, 0, 0]],
-             -1),
+             1),
 
             # clean highest 2 (situation might not be possible)
             ([[2, 19, 0, 0, 0],
@@ -60,7 +60,7 @@ class TestTable:
               [7, 18, 0, 0, 0],
               [8, 20, 0, 0, 0],
               [15, 11, 0, 0, 0]],
-             -2),
+             2),
 
             # clean smallest number of points
             ([[2, 5, 7, 10, 0],
@@ -72,7 +72,7 @@ class TestTable:
               [7, 11, 0, 0, 0],
               [8, 22, 0, 0, 0],
               [1, 0, 0, 0, 0]],
-             -3),
+             3),
 
             # place in further position
             ([[2, 5, 7, 10, 0],
@@ -90,7 +90,7 @@ class TestTable:
     def test_card_placement(
             self, table: List[List[int]], played_card: int, expected: List[List[int]], expected_score: int
     ) -> None:
-        t = env.Table.from_nparray(np.array(table), num_players=1)
+        t = env.Table.from_nparray(np.array(table))
         score = t.play(np.array([played_card]))
         assert np.array_equal(t.rows, np.array(expected))
         assert score == expected_score
@@ -120,7 +120,7 @@ class TestTable:
               [25, 27, 29, 0, 0],
               [70, 0, 0, 0, 0],
               [60, 73, 82, 83, 0]],
-             [0, 0, -15, 0]),
+             [0, 0, 15, 0]),
 
             # every player plays on the same stack
             ([[10, 0, 0, 0, 0],
@@ -132,7 +132,7 @@ class TestTable:
               [31, 0, 0, 0, 0],
               [55, 61, 66, 68, 0],
               [60, 73, 82, 0, 0]],
-             [0, -8, 0, 0]),
+             [0, 8, 0, 0]),
 
             # clean before others
             ([[10, 0, 0, 0, 0],
@@ -144,18 +144,18 @@ class TestTable:
               [9, 0, 0, 0, 0],
               [70, 0, 0, 0, 0],
               [60, 73, 82, 0, 0]],
-             [-3, 0, -15, 0]),
+             [3, 0, 15, 0]),
         ])
     def test_play_ordering(
             self, table: List[List[int]], played_cards: List[int], expected: List[List[int]], expected_score: List[int]
     ) -> None:
-        t = env.Table.from_nparray(np.array(table), num_players=4)
+        t = env.Table.from_nparray(np.array(table))
         score = t.play(np.array(played_cards))
         assert np.array_equal(t.rows, np.array(expected))
         assert np.array_equal(score, expected_score)
 
     def test_reset(self) -> None:
-        t = env.Table(num_players=3)
+        t = env.Table()
         t.reset(np.array([10, 7, 55, 12]))
         t.play(np.array([13, 80, 99]))
         assert t.turn == 1
@@ -171,7 +171,7 @@ class TestTable:
         t = env.Table.from_nparray(np.array([[13, 15, 0, 0, 0],
                                              [9, 0, 0, 0, 0],
                                              [22, 83, 101, 0, 0],
-                                             [55, 75, 104, 0, 0]]), num_players=random.randint(2, 10))
+                                             [55, 75, 104, 0, 0]]))
 
         enc = t.encode()
 
@@ -189,18 +189,40 @@ class TestDeck:
     def test_distribute_all_cards(self) -> None:
         deck = env.Deck()
 
-        stacks, hands = deck.distribute(num_players=10)
+        stacks, hands = deck.distribute(env.RuleState(num_players=10, expert=random.random() < .5))
 
         assert stacks.shape == (4,)
         assert len(hands) == 10
-        assert hands[random.randint(0, 10)].cards.shape == (10,)
+        assert hands[random.randint(0, 9)].cards.shape == (10,)
         all_cards = np.array([hands[i].cards for i in range(10)])
         assert np.alltrue(np.sort(np.concatenate((stacks, all_cards.flatten()))) == np.arange(1, 105))
+
+    def test_distribute_standard_rules(self) -> None:
+        deck = env.Deck()
+
+        stacks, hands = deck.distribute(env.RuleState(num_players=4, expert=False))
+
+        assert stacks.shape == (4,)
+        assert len(hands) == 4
+        assert hands[random.randint(0, 3)].cards.shape == (10,)
+        all_cards = np.array([hands[i].cards for i in range(4)])
+        assert np.any(np.sort(np.concatenate((stacks, all_cards.flatten()))) > 44)
+
+    def test_distribute_expert_rules(self) -> None:
+        deck = env.Deck()
+
+        stacks, hands = deck.distribute(env.RuleState(num_players=4, expert=True))
+
+        assert stacks.shape == (4,)
+        assert len(hands) == 4
+        assert hands[random.randint(0, 3)].cards.shape == (10,)
+        all_cards = np.array([hands[i].cards for i in range(4)])
+        assert np.alltrue(np.sort(np.concatenate((stacks, all_cards.flatten()))) == np.arange(1, 45))
 
     def test_cards_are_not_duplicated(self) -> None:
         deck = env.Deck()
 
-        stacks, hands = deck.distribute(num_players=3)
+        stacks, hands = deck.distribute(env.RuleState(num_players=3, expert=random.random() < .5))
 
         assert stacks.shape == (4,)
         assert len(hands) == 3
@@ -245,7 +267,8 @@ class TestHand:
 class TestScoreboard:
 
     def test_sum(self) -> None:
-        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
 
         scoreboard += np.array([3, 2, 4, 1])
         assert np.array_equal(scoreboard.scores, np.array([3, 2, 4, 1]))
@@ -254,19 +277,30 @@ class TestScoreboard:
         assert np.array_equal(scoreboard.scores, np.array([4, 2, 6, 4]))
 
     def test_reset(self) -> None:
-        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
 
         scoreboard += np.array([3, 2, 4, 1])
-        scoreboard.reset()
+        scoreboard.reset(num_players=4)
 
         assert np.array_equal(scoreboard.scores, np.array([0, 0, 0, 0]))
 
+    def test_variable_number_of_players(self) -> None:
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
+
+        scoreboard += np.array([3, 2, 4, 1])
+        scoreboard.reset(num_players=7)
+
+        assert np.array_equal(scoreboard.scores, np.array([0, 0, 0, 0, 0, 0, 0]))
+
     def test_encode(self) -> None:
-        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
 
-        scoreboard += np.array([-0, -66, -33, -67])
+        scoreboard += np.array([0, 66, 33, 67])
 
-        assert np.array_equal(scoreboard.encode(), np.array([0, 1, .5, 1]))
+        assert np.array_equal(scoreboard.encode(), np.array([0, 1, .5, 1, -1, -1, -1, -1, -1, -1]))
 
 
 class TestClassificationRwd:
@@ -276,9 +310,10 @@ class TestClassificationRwd:
                                                    {i: np.random.random() for i in range(4)},
                                                    {i: True for i in range(4)},
                                                    {i: {} for i in range(4)}))
-        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
         scoreboard += np.array([-4, -6, -7, -3])
-        wrapped = env.ClassificationRwd(_env, scoreboard, num_players=4)
+        wrapped = env.ClassificationRwd(_env, scoreboard, env.RuleState(num_players=4, expert=random.random() < .5))
 
         _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
 
@@ -289,9 +324,10 @@ class TestClassificationRwd:
                                                    {i: np.random.random() for i in range(4)},
                                                    {i: False for i in range(4)},
                                                    {i: {} for i in range(4)}))
-        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
         scoreboard += np.array([4, 6, 7, 3])
-        wrapped = env.ClassificationRwd(_env, scoreboard, num_players=4)
+        wrapped = env.ClassificationRwd(_env, scoreboard, env.RuleState(num_players=4, expert=random.random() < .5))
 
         _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
 
@@ -305,9 +341,10 @@ class TestProportionalRwd:
                                                    {i: np.random.random() for i in range(4)},
                                                    {i: True for i in range(4)},
                                                    {i: {} for i in range(4)}))
-        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
         scoreboard += np.array([-4, -6, -2, -8])
-        wrapped = env.ProportionalRwd(_env, scoreboard, num_players=4)
+        wrapped = env.ProportionalRwd(_env, scoreboard, env.RuleState(num_players=4, expert=random.random() < .5))
 
         _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
 
@@ -321,9 +358,10 @@ class TestProportionalRwd:
                                                    {i: np.random.random() for i in range(4)},
                                                    {i: False for i in range(4)},
                                                    {i: {} for i in range(4)}))
-        scoreboard = env.Scoreboard(num_players=4)
+        scoreboard = env.Scoreboard()
+        scoreboard.reset(num_players=4)
         scoreboard += np.array([4, 6, 7, 3])
-        wrapped = env.ProportionalRwd(_env, scoreboard, num_players=4)
+        wrapped = env.ProportionalRwd(_env, scoreboard, env.RuleState(num_players=4, expert=random.random() < .5))
 
         _, rwd, _, _ = wrapped.step({i: np.random.randint(10) for i in range(4)})
 

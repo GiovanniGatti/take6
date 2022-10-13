@@ -206,7 +206,6 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
             # The workaround I found was to store this temporary
             # information in the user_data section of the episode.
             episode.user_data['selected_policies_id'] = []
-            num_players = worker.policy_config['env_config']['num-players']
 
             _current_policies = list(worker.policy_map.keys())
             _policy_ids = [int(p.replace('opponent_v', '')) for p in _current_policies
@@ -215,10 +214,9 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
             # keep only latest POLICY_BUFFER_SIZE policies
             _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
             _policies_to_sample.append('random')
-            _policies_to_sample += ['random_{}'.format(i) for i in range(num_players - len(_policies_to_sample))]
+            _policies_to_sample += ['random_{}'.format(i) for i in range(10 - len(_policies_to_sample))]
 
-            episode.user_data['selected_policies_id'] = np.random.choice(
-                _policies_to_sample, size=num_players - 1, replace=False)
+            episode.user_data['selected_policies_id'] = np.random.choice(_policies_to_sample, size=9, replace=False)
             return 'learner'
         return episode.user_data['selected_policies_id'][agent_id - 1]
 
@@ -315,7 +313,10 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         entropy_coeff = _namespace.entropy_coeff[0]
     elif len(_namespace.entropy_coeff) == 2:
         entropy_coeff = max(_namespace.entropy_coeff)
-        decay_timesteps = _namespace.num_players * train_batch_size * _namespace.entropy_coeff_decay
+        if _namespace.num_players:
+            decay_timesteps = _namespace.num_players * train_batch_size * _namespace.entropy_coeff_decay
+        else:
+            decay_timesteps = (sum(range(2, 11)) / 9) * train_batch_size * _namespace.entropy_coeff_decay
         entropy_coeff_schedule = [(0, max(_namespace.entropy_coeff)), (decay_timesteps, min(_namespace.entropy_coeff))]
     else:
         raise ValueError('Expected 1 (constant) or 2 (initial and final) values for'
@@ -341,6 +342,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'env': 'take6',
             'env_config': {
                 'num-players': _namespace.num_players,
+                'expert': _namespace.expert_mode,
                 'rwd-fn': _namespace.rwd_fn,
                 'with-scores': _namespace.with_scores,
                 'with-history': _namespace.with_history,
@@ -422,7 +424,11 @@ if __name__ == '__main__':
     parser.add_argument('--run-id', type=str, help='The run-id to start the training from')
     parser.add_argument('--checkpoint', type=int, help='The checkpoint number to start the training from')
 
-    parser.add_argument('--num-players', type=int, default=4, help='The number of players in the training env')
+    parser.add_argument('--num-players', type=int, default=None, help='The number of players in the training env. '
+                                                                      'By default, the number of players is arbitrary, '
+                                                                      'ranging from 2 to 10 players.')
+    parser.add_argument('--expert-mode', type=bool, default=None, help='Whether env follows expert rules mode or not. '
+                                                                       'By default, rules selected are arbitrarily.')
 
     # hyper-parameters
     parser.add_argument('--minibatch-size', type=int, default=1024, help='The sgd minibatch size')

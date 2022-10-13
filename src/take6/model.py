@@ -22,14 +22,15 @@ class Take6Model(tf_modelv2.TFModelV2):
         original_space = obs_space.original_space if hasattr(obs_space, 'original_space') else obs_space
         real_obs_space = original_space['real_obs']
 
-        flat_space_shape = 0
+        flat_space_shape_low = np.array([])
+        flat_space_shape_high = np.array([])
         assert isinstance(real_obs_space, spaces.Tuple)
         for s in real_obs_space.spaces:
             assert isinstance(s, spaces.Box)
-            assert np.alltrue(s.low == 0.) and np.alltrue(s.high == 1.)
-            flat_space_shape += s.shape[0]
+            flat_space_shape_low = np.concatenate((flat_space_shape_low, s.low))
+            flat_space_shape_high = np.concatenate((flat_space_shape_high, s.high))
 
-        flat_space = spaces.Box(low=0, high=1, shape=(flat_space_shape,))
+        flat_space = spaces.Box(low=flat_space_shape_low, high=flat_space_shape_high)
 
         super().__init__(obs_space, action_space, num_outputs, model_config, name)
         self.internal_model = fcnet.FullyConnectedNetwork(

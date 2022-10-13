@@ -1,5 +1,6 @@
 import abc
-from typing import Dict, Any, Tuple, List
+import random
+from typing import Dict, Any, Tuple, List, Optional
 
 import gym
 import numpy as np
@@ -8,10 +9,62 @@ from ray.rllib import env
 from ray.rllib.utils.typing import MultiAgentDict
 
 
+class RuleState:
+
+    def __init__(self, num_players: int, expert: bool):
+        self._num_players = num_players
+        self._expert = expert
+
+    @property
+    def num_players(self) -> int:
+        return self._num_players
+
+    @num_players.setter
+    def num_players(self, num_players: int) -> None:
+        self._num_players = num_players
+
+    @property
+    def expert(self) -> bool:
+        return self._expert
+
+    @expert.setter
+    def expert(self, expert: bool) -> None:
+        self._expert = expert
+
+
+class Scoreboard:
+
+    def __init__(self):
+        self._scores = -np.ones(10, dtype=np.float32)  # max number of players
+        self._max_score = 66.
+        self._num_players = 0
+
+    @property
+    def scores(self) -> np.ndarray:
+        return self._scores[:self._num_players]
+
+    @classmethod
+    def enc_space(cls) -> spaces.Space:
+        return spaces.Box(low=-1., high=1., shape=(10,), dtype=np.float32)
+
+    def __add__(self, round_scores: np.ndarray) -> 'Scoreboard':
+        assert round_scores.shape[0] == self._num_players
+        self._scores[:self._num_players] += round_scores
+        return self
+
+    def encode(self) -> np.ndarray:
+        norm_scores = np.minimum(1., self._scores[self._scores >= 0.] / self._max_score)
+        return np.concatenate((norm_scores, self._scores[self._scores < 0]))
+
+    def reset(self, num_players: int) -> None:
+        self._scores = -np.ones(10, dtype=np.float32)
+        self._num_players = num_players
+        self._scores[:num_players] = 0
+
+
 class Table:
 
-    def __init__(self, num_players: int):
-        self._num_players = num_players
+    def __init__(self):
         self._rows = np.zeros((4, 5), dtype=int)
 
         self._cattle_heads = np.ones(104, dtype=int)
@@ -25,10 +78,6 @@ class Table:
         self._turn = 0
 
     @property
-    def num_players(self) -> int:
-        return self._num_players
-
-    @property
     def rows(self) -> np.ndarray:
         return self._rows
 
@@ -38,7 +87,7 @@ class Table:
 
     @classmethod
     def enc_space(cls) -> spaces.Space:
-        return spaces.Box(low=0, high=1, shape=(4 * 104,))
+        return spaces.Box(low=0., high=1., shape=(4 * 104,), dtype=np.float32)
 
     def encode(self) -> np.ndarray:
         enc = np.zeros((4, 104), dtype=np.float32)
@@ -48,10 +97,11 @@ class Table:
         return enc.flatten()
 
     def play(self, cards: np.ndarray) -> np.ndarray:
-        scores = np.zeros(self._num_players, dtype=int)
+        num_players = cards.shape[0]
+        scores = np.zeros(num_players, dtype=int)
 
-        id_card = np.concatenate((np.arange(self._num_players).reshape((self._num_players, 1)),
-                                  cards.reshape((self._num_players, 1))),
+        id_card = np.concatenate((np.arange(num_players).reshape((num_players, 1)),
+                                  cards.reshape((num_players, 1))),
                                  axis=-1)
 
         for i, card in id_card[np.argsort(id_card[:, 1])]:
@@ -82,8 +132,7 @@ class Table:
                 self._rows[idx, 0] = card
 
         self._turn += 1
-
-        return scores
+        return -scores
 
     def reset(self, cards: np.ndarray) -> None:
         assert cards.shape == (4,)
@@ -92,8 +141,8 @@ class Table:
         self._turn = 0
 
     @classmethod
-    def from_nparray(cls, rows: np.ndarray, num_players: int) -> 'Table':
-        _table = Table(num_players)
+    def from_nparray(cls, rows: np.ndarray) -> 'Table':
+        _table = Table()
         assert rows.shape == _table._rows.shape
         _table._rows = rows
         return _table
@@ -110,11 +159,11 @@ class Hand:
 
     @classmethod
     def enc_space(cls) -> spaces.Space:
-        return spaces.Box(low=0, high=1, shape=(104,))
+        return spaces.Box(low=0., high=1., shape=(104,), dtype=np.float32)
 
     @classmethod
     def mask_enc_space(cls) -> spaces.Space:
-        return spaces.Box(low=0, high=1, shape=(10,), dtype=np.float32)
+        return spaces.Box(low=0., high=1., shape=(10,), dtype=np.float32)
 
     def encode(self) -> np.ndarray:
         enc = np.zeros(104, dtype=np.float32)
@@ -138,54 +187,33 @@ class Deck:
         self._deck = np.arange(1, 105)
         self._rand = np.random.default_rng()
 
-    def distribute(self, num_players: int) -> Tuple[np.ndarray, List[Hand]]:
-        self._rand.shuffle(self._deck)
-        stacks, deck = self._deck[:4], self._deck[4:]
+    def distribute(self, rule_state: RuleState) -> Tuple[np.ndarray, List[Hand]]:
+        num_players = rule_state.num_players
+        if rule_state.expert:
+            shuffled = self._rand.permutation(self._deck[:num_players * 10 + 4])
+        else:
+            shuffled = self._rand.permutation(self._deck)
+        stacks, deck = shuffled[:4], shuffled[4:]
         hands = np.sort(self._rand.choice(deck, size=(num_players, 10), replace=False), axis=1)
         return stacks, [Hand(hands[i]) for i in range(num_players)]
 
 
-class Scoreboard:
-
-    def __init__(self, num_players: int):
-        self._num_players = num_players
-        self._scores = np.zeros(self._num_players, dtype=np.float32)
-        self._min_score = -66.
-
-    @property
-    def scores(self) -> np.ndarray:
-        return self._scores
-
-    def enc_space(self) -> spaces.Space:
-        return spaces.Box(low=0, high=1, shape=(self._num_players,))
-
-    def encode(self) -> np.ndarray:
-        return np.minimum(1., self._scores / self._min_score)
-
-    def __add__(self, round_scores: np.ndarray) -> 'Scoreboard':
-        self._scores += round_scores
-        return self
-
-    def reset(self) -> None:
-        self._scores = np.zeros_like(self._scores)
-
-
 class GroupedActionMultiEnv(env.MultiAgentEnv, abc.ABC):
 
-    def __init__(self, num_players: int):
+    def __init__(self, rule_state: RuleState):
         super().__init__()
-        self.num_players = num_players
-        self._agent_ids = set(range(num_players))
+        self._rule_state = rule_state
+        self._agent_ids = set(range(10))
 
     def observation_space_sample(self, agent_ids: List[Any] = None) -> MultiAgentDict:
         if agent_ids is None:
-            agent_ids = list(range(self.num_players))
+            agent_ids = list(range(self._rule_state.num_players))
         obs = {agent_id: self.observation_space.sample() for agent_id in agent_ids}
         return obs
 
     def action_space_sample(self, agent_ids: List[Any] = None) -> MultiAgentDict:
         if agent_ids is None:
-            agent_ids = list(range(self.num_players))
+            agent_ids = list(range(self._rule_state.num_players))
         actions = {agent_id: self.action_space.sample() for agent_id in agent_ids}
         return actions
 
@@ -202,7 +230,7 @@ class GroupedActionMultiEnv(env.MultiAgentEnv, abc.ABC):
 
 class Take6(GroupedActionMultiEnv):
 
-    def __init__(self, table: Table, deck: Deck, scoreboard: Scoreboard) -> None:
+    def __init__(self, table: Table, deck: Deck, scoreboard: Scoreboard, rule_state: RuleState) -> None:
         self._table = table
         self._deck = deck
         self._hands: List[Hand] = []
@@ -214,11 +242,11 @@ class Take6(GroupedActionMultiEnv):
              'real_obs': spaces.Tuple((Hand.enc_space(), Table.enc_space()))})
 
         self._scoreboard = scoreboard
-        super().__init__(table.num_players)
+        super().__init__(rule_state)
 
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
-        played_cards = np.array([self._hands[i].select(action_dict[i]) for i in range(self._table.num_players)])
+        played_cards = np.array([self._hands[i].select(action_dict[i]) for i in range(self._rule_state.num_players)])
         assert np.alltrue(played_cards >= 1)
         assert np.alltrue(played_cards <= 104)
 
@@ -232,9 +260,9 @@ class Take6(GroupedActionMultiEnv):
 
         table_enc = self._table.encode()
         obs, rwd, done, info = {}, {}, {}, {}
-        for i in range(self._table.num_players):
+        for i in range(self._rule_state.num_players):
             obs[i] = {'action_mask': self._hands[i].mask(), 'real_obs': (self._hands[i].encode(), table_enc)}
-            rwd[i] = round_scores[i]
+            rwd[i] = -round_scores[i]
             done[i] = _done
             info[i] = {'score': self._scoreboard.scores[i], 'played_card': played_cards[i]}
         done['__all__'] = _done
@@ -242,14 +270,14 @@ class Take6(GroupedActionMultiEnv):
         return obs, rwd, done, info
 
     def reset(self) -> MultiAgentDict:
-        stacks, self._hands = self._deck.distribute(self._table.num_players)
+        stacks, self._hands = self._deck.distribute(self._rule_state)
         self._history[:] = 0
         self._history[stacks - 1] += 1
         self._table.reset(stacks)
         table_enc = self._table.encode()
-        self._scoreboard.reset()
+        self._scoreboard.reset(self._rule_state.num_players)
         return {i: {'action_mask': self._hands[i].mask(),
-                    'real_obs': (self._hands[i].encode(), table_enc)} for i in range(self._table.num_players)}
+                    'real_obs': (self._hands[i].encode(), table_enc)} for i in range(self._rule_state.num_players)}
 
     def render(self, mode=None) -> None:
         pass
@@ -257,10 +285,9 @@ class Take6(GroupedActionMultiEnv):
 
 class ClassificationRwd(GroupedActionMultiEnv):
 
-    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, num_players: int):
-        super().__init__(num_players)
+    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, rule_state: RuleState):
+        super().__init__(rule_state)
         self._env = _env
-        self._num_players = num_players
         self._scoreboard = scoreboard
         self.observation_space = _env.observation_space
         self.action_space = _env.action_space
@@ -277,9 +304,9 @@ class ClassificationRwd(GroupedActionMultiEnv):
             s, c = np.unique(scores, return_counts=True)
             for _s in s[c > 1]:  # handle ties
                 classification[scores == _s] = np.min(classification[scores == _s])
-            rwd = {i: -classification[i] for i in range(self._num_players)}
+            rwd = {i: -classification[i] for i in range(self._rule_state.num_players)}
         else:
-            rwd = {i: 0 for i in range(self._num_players)}
+            rwd = {i: 0 for i in range(self._rule_state.num_players)}
 
         return obs, rwd, done, info
 
@@ -292,10 +319,9 @@ class ClassificationRwd(GroupedActionMultiEnv):
 
 class ProportionalRwd(GroupedActionMultiEnv):
 
-    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, num_players: int):
-        super().__init__(num_players)
+    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, rule_state: RuleState):
+        super().__init__(rule_state)
         self._env = _env
-        self._num_players = num_players
         self._scoreboard = scoreboard
         self.observation_space = _env.observation_space
         self.action_space = _env.action_space
@@ -307,9 +333,9 @@ class ProportionalRwd(GroupedActionMultiEnv):
 
         if done[0]:
             scores = self._scoreboard.scores
-            new_rwd = {i: -scores[i] / np.sum(scores) for i in range(self._num_players)}
+            new_rwd = {i: -scores[i] / np.sum(scores) for i in range(self._rule_state.num_players)}
         else:
-            new_rwd = {i: 0. for i in range(self._num_players)}
+            new_rwd = {i: 0. for i in range(self._rule_state.num_players)}
 
         return obs, new_rwd, done, info
 
@@ -322,18 +348,18 @@ class ProportionalRwd(GroupedActionMultiEnv):
 
 class ScoreWrapper(GroupedActionMultiEnv):
 
-    def __init__(self, _env: GroupedActionMultiEnv, scoreboard: Scoreboard):
+    def __init__(self, _env: env.MultiAgentEnv, scoreboard: Scoreboard, rule_state: RuleState):
         assert isinstance(_env.observation_space, spaces.Dict), 'Original environment must have a Dict obs. space'
         assert 'real_obs' in _env.observation_space.keys(), 'Original environment must have an real_obs space'
-        super().__init__(_env.num_players)
+        super().__init__(rule_state)
 
         self._env = _env
         self._scoreboard = scoreboard
         self.action_space = _env.action_space
         self.observation_space = _env.observation_space
-        self._indexes = np.arange(_env.num_players)
+        self._indexes = np.arange(Scoreboard.enc_space().shape[0])
 
-        self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'], scoreboard.enc_space()))
+        self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'], Scoreboard.enc_space()))
 
     def step(
             self, action_dict: MultiAgentDict
@@ -358,10 +384,10 @@ class ScoreWrapper(GroupedActionMultiEnv):
 # noinspection PyMissingConstructor
 class PlayedCardsWrapper(GroupedActionMultiEnv):
 
-    def __init__(self, _env: GroupedActionMultiEnv, table: Table):
+    def __init__(self, _env: env.MultiAgentEnv, table: Table, rule_state: RuleState):
         assert isinstance(_env.observation_space, spaces.Dict), 'Original environment must have a Dict obs. space'
         assert 'real_obs' in _env.observation_space.keys(), 'Original environment must have an real_obs space'
-        super().__init__(_env.num_players)
+        super().__init__(rule_state)
 
         self.observation_space = _env.observation_space
         self.action_space = _env.action_space
@@ -369,14 +395,14 @@ class PlayedCardsWrapper(GroupedActionMultiEnv):
         self._table = table
 
         self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'],
-                                                           spaces.Box(low=0, high=1, shape=(104,))))
+                                                           spaces.Box(low=0., high=1., shape=(104,), dtype=np.float32)))
 
         self._history = np.zeros(104, dtype=np.float32)
 
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
         obs, rwd, done, info = self._env.step(action_dict)
-        played_cards = np.array([info[i]['played_card'] for i in range(self._table.num_players)])
+        played_cards = np.array([info[i]['played_card'] for i in range(self._rule_state.num_players)])
         assert np.all(self._history[played_cards - 1] == 0), \
             'Some cards are being repeated history={}, played_cards={}'.format(self._history, played_cards)
         self._history[played_cards - 1] = 1
@@ -398,23 +424,58 @@ class PlayedCardsWrapper(GroupedActionMultiEnv):
         pass
 
 
-def take6(config: Dict[str, Any]) -> gym.Env:
-    num_players = config['num-players']
-    scoreboard = Scoreboard(num_players)
-    table = Table(num_players)
+class RuleWrapper(GroupedActionMultiEnv):
 
-    _env = Take6(table, Deck(), scoreboard)
+    def __init__(
+            self, _env: env.MultiAgentEnv, rule_state: RuleState, num_players: Optional[int], expert: Optional[bool]):
+        super().__init__(rule_state)
+
+        self._env = _env
+        self._num_players = num_players
+        self._expert = expert
+
+        self.observation_space = _env.observation_space
+        self.action_space = _env.action_space
+
+        self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'],
+                                                           spaces.Box(low=0., high=1., shape=(1,), dtype=np.float32)))
+
+    def step(
+            self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
+        obs, rwd, done, info = self._env.step(action_dict)
+        return self.observation(obs), rwd, done, info
+
+    def reset(self) -> MultiAgentDict:
+        self._rule_state.num_players = self._num_players or random.randint(2, 10)
+        self._rule_state.expert = self._expert or random.random() < .5
+        return self.observation(self._env.reset())
+
+    def observation(self, obs: MultiAgentDict) -> MultiAgentDict:
+        for _obs in obs.values():
+            _obs['real_obs'] = (*_obs['real_obs'], np.array([self._rule_state.expert], dtype=np.float32))
+        return obs
+
+
+def take6(config: Dict[str, Any]) -> gym.Env:
+    rule_state = RuleState(num_players=config['num-players'] or random.randint(2, 10),
+                           expert=config['expert'] or random.random() < .5)
+    scoreboard = Scoreboard()
+    table = Table()
+
+    _env = Take6(table, Deck(), scoreboard, rule_state)
 
     rwd_fn = config['rwd-fn']
     if rwd_fn == 'proportional-score':
-        _env = ProportionalRwd(_env, scoreboard, num_players)
+        _env = ProportionalRwd(_env, scoreboard, rule_state)
     elif rwd_fn == 'classification':
-        _env = ClassificationRwd(_env, scoreboard, num_players)
+        _env = ClassificationRwd(_env, scoreboard, rule_state)
 
     if config['with-history']:
-        _env = PlayedCardsWrapper(_env, table)
+        _env = PlayedCardsWrapper(_env, table, rule_state)
 
     if config['with-scores']:
-        _env = ScoreWrapper(_env, scoreboard)
+        _env = ScoreWrapper(_env, scoreboard, rule_state)
+
+    _env = RuleWrapper(_env, rule_state, num_players=config['num-players'], expert=config['expert'])
 
     return _env
