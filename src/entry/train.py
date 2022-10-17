@@ -29,7 +29,17 @@ from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
 
-POLICY_BUFFER_SIZE = 15
+POLICY_BUFFER_SIZE = 5
+
+
+def t_or_f(arg):
+    ua = str(arg).upper()
+    if 'TRUE'.startswith(ua):
+        return True
+    elif 'FALSE'.startswith(ua):
+        return False
+    else:
+        pass  # error condition maybe?
 
 
 def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
@@ -37,11 +47,15 @@ def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
         return 'learner'
     _current_policies = list(worker.policy_map.keys())
     _policy_ids = [int(p.replace('opponent_v', ''))
-                   for p in _current_policies if p not in ('learner', 'random') and not p.startswith('random_')]
+                   for p in _current_policies if p
+                   not in ('learner', 'random')
+                   and not p.startswith('random_')
+                   and not p.endswith('_t')]
 
     # keep only latest POLICY_BUFFER_SIZE policies
     _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
     _policies_to_sample.append('random')
+    _policies_to_sample += [p for p in _current_policies if p.endswith('_t')]
 
     return random.choice(_policies_to_sample)
 
@@ -138,20 +152,29 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         super().on_episode_end(
             worker=worker, base_env=base_env, policies=policies, episode=episode, env_index=env_index, **kwargs)
         scores = []
-        for _id in sorted(k[0] for k in episode.agent_rewards.keys()):
+        agents = []
+        ids = []
+        for _id, t in episode.agent_rewards.keys():
+            ids.append(_id)
+            agents.append(t)
             scores.append(episode.last_info_for(_id)['score'])
 
-        num_players = len(scores)
-        classification = np.zeros(num_players, dtype=np.int)
-        classification[np.argsort(scores)] = np.arange(num_players)[::-1]
-        s, c = np.unique(scores, return_counts=True)
-        for _s in s[c > 1]:  # handle ties
-            classification[scores == _s] = np.min(classification[scores == _s])
+        # This is a misuse of hist_data, but I could not find another way to send data to tournament method
+        episode.hist_data['true_score'] = scores
 
-        episode.custom_metrics['win'] = 1 if np.argmax(scores) == 0 else 0
-        episode.custom_metrics['score'] = scores[0]
-        episode.custom_metrics['relative_score'] = scores[0] / np.sum(scores)
-        episode.custom_metrics['weighted_classification'] = -np.arange(len(scores))[classification[0]]
+        if 'learner' in agents:
+            num_players = len(agents)
+            classification = np.zeros(num_players, dtype=np.int)
+            classification[np.argsort(scores)[::-1]] = np.arange(num_players)[::-1]
+            s, c = np.unique(scores, return_counts=True)
+            for _s in s[c > 1]:  # handle ties
+                classification[scores == _s] = np.min(classification[scores == _s])
+
+            idx = agents.index('learner')
+            episode.custom_metrics['win'] = 1 if np.argmin(scores) == idx else 0
+            episode.custom_metrics['score'] = scores[idx]
+            episode.custom_metrics['relative_score'] = scores[idx] / np.sum(scores)
+            episode.custom_metrics['weighted_classification'] = -np.arange(len(scores))[classification[idx]]
 
     def on_train_result(self, result, **kwargs):
         trainer = kwargs['trainer']
@@ -161,13 +184,14 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
         current_policies = list(trainer.workers.local_worker().policy_map.keys())
-        trained_policies = [p for p in current_policies
-                            if p not in ('learner', 'random') and not p.startswith('random_')]
+        trained_policies = [p for p in current_policies if p
+                            not in ('learner', 'random') and not p.startswith('random_')]
 
-        if trainer.iteration > 0 and trainer.iteration % 25 == 0 and namespace.self_play:
-            latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in trained_policies) \
+        if trainer.iteration > 0 and trainer.iteration % 2 == 0 and namespace.self_play:
+            latest_opponent = max(int(_id.replace('opponent_v', '').replace('_t', '')) for _id in trained_policies) \
                 if trained_policies else 0
             new_pol_id = f'opponent_v{latest_opponent + 1}'
+            new_pol_id += '_t' if trainer.iteration % 10 == 0 else ''
             current_policies.append(new_pol_id)
             trained_policies.append(new_pol_id)
             new_policy = trainer.add_policy(
@@ -180,9 +204,9 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
 
             # storing at least 1 policy more than needed otherwise
             # RLLib may fail to find policy when rolling out already existing episodes
-            if len(trained_policies) > POLICY_BUFFER_SIZE + 1:
-                _ids = [int(_id.replace('opponent_v', '')) for _id in current_policies
-                        if _id not in ('learner', 'random') and not _id.startswith('random_')]
+            tmp_policies = [p for p in trained_policies if not p.endswith('_t')]
+            if len(tmp_policies) > POLICY_BUFFER_SIZE + 1:
+                _ids = [int(_id.replace('opponent_v', '')) for _id in tmp_policies]
                 to_remove = ['opponent_v{}'.format(_id) for _id in sorted(_ids)[:-(POLICY_BUFFER_SIZE + 1)]]
                 for policy_id in to_remove:
                     trainer.remove_policy(policy_id)
@@ -191,7 +215,7 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['league_size'] = len(trained_policies)
 
 
-def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
+def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
     if not hasattr(_algorithm, 'ratings'):
         # see https://trueskill.info/help.html
         trueskill.setup(mu=25., sigma=25. / 3, beta=20.8, tau=25. / 100, draw_probability=0.18)
@@ -208,17 +232,22 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
             episode.user_data['selected_policies_id'] = []
 
             _current_policies = list(worker.policy_map.keys())
-            _policy_ids = [int(p.replace('opponent_v', '')) for p in _current_policies
-                           if p not in ('learner', 'random') and not p.startswith('random_')]
-
-            # keep only latest POLICY_BUFFER_SIZE policies
-            _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
-            _policies_to_sample.append('random')
+            tournament_policies = [p for p in _current_policies if p.endswith('_t')]
+            _policies_to_sample = ['learner', ]
+            _policies_to_sample += [p for p in sorted(tournament_policies,
+                                                      key=lambda k: int(k.replace('opponent_v', '').replace('_t', '')),
+                                                      reverse=True)]
+            _policies_to_sample += ['random', ]
             _policies_to_sample += ['random_{}'.format(i) for i in range(10 - len(_policies_to_sample))]
 
-            episode.user_data['selected_policies_id'] = np.random.choice(_policies_to_sample, size=9, replace=False)
-            return 'learner'
-        return episode.user_data['selected_policies_id'][agent_id - 1]
+            # higher chance of selecting most recent policies
+            probs = np.arange(len(_policies_to_sample)) / 3.5
+            probs = np.exp(-probs) / np.sum(np.exp(-probs))
+
+            episode.user_data['selected_policies_id'] = np.random.choice(
+                _policies_to_sample, size=10, replace=False, p=probs)
+
+        return episode.user_data['selected_policies_id'][agent_id]
 
     eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
 
@@ -237,21 +266,19 @@ def evaluation(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         scores = []
         players = []
 
-        for (_, t), score in episode.agent_rewards.items():
+        for idx, t in episode.agent_rewards.keys():
             ratings.append((_algorithm.ratings[t],))
-            scores.append(score)
+            scores.append(episode.hist_data['true_score'][idx])
             players.append(t)
 
         num_players = len(players)
-        classification = np.zeros(num_players)
-        classification[np.argsort(scores)] = np.arange(num_players)[::-1]
+        classification = np.zeros(num_players, dtype=int)
+        classification[np.argsort(scores)[::-1]] = np.arange(num_players, dtype=int)[::-1]
         s, c = np.unique(scores, return_counts=True)
         ties += np.sum(c > 1)
         for _s in s[c > 1]:  # handle ties
             classification[scores == _s] = np.min(classification[scores == _s])
         new_ratings = trueskill.rate(ratings, ranks=list(classification))
-
-        episode.custom_metrics['win'] = classification[0] == 0
 
         assert np.unique(players).shape[0] == num_players, \
             'Repeated versions of a policy are playing within the same match'
@@ -393,11 +420,11 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'train_batch_size': train_batch_size,
             'sgd_minibatch_size': sgd_minibatch_size,
             'num_sgd_iter': num_sgd_iter,
-            'vf_clip_param': 10.,
+            'vf_clip_param': .3,
 
             # Policy evaluation config
             'evaluation_interval': 1,
-            'custom_eval_function': evaluation,
+            'custom_eval_function': tournament,
             'evaluation_num_workers': eval_workers,
             'evaluation_duration': evaluation_duration,
             'evaluation_duration_unit': 'episodes',
@@ -407,12 +434,12 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'callbacks': callbacks.MultiCallbacks([SelfPlayCallback, TrackingCallback]),
         },
         restore=_checkpoint,
-        checkpoint_freq=25,
+        checkpoint_freq=1,
         stop=lambda t, r: (r['info']['learner']['learner']['learner_stats']['entropy'] <= _namespace.stop or
                            r['training_iteration'] >= _namespace.max_iterations),
         checkpoint_at_end=True,
         raise_on_failed_trial=False,
-        max_failures=10,
+        max_failures=50,
         verbose=log.Verbosity.V1_EXPERIMENT,
         local_dir=local_dir)
 
@@ -427,8 +454,9 @@ if __name__ == '__main__':
     parser.add_argument('--num-players', type=int, default=None, help='The number of players in the training env. '
                                                                       'By default, the number of players is arbitrary, '
                                                                       'ranging from 2 to 10 players.')
-    parser.add_argument('--expert-mode', type=bool, default=None, help='Whether env follows expert rules mode or not. '
-                                                                       'By default, rules selected are arbitrarily.')
+    parser.add_argument('--expert-mode', type=t_or_f, default=None,
+                        help='Whether env follows expert rules mode or not. '
+                             'By default, rules selected are arbitrarily.')
 
     # hyper-parameters
     parser.add_argument('--minibatch-size', type=int, default=1024, help='The sgd minibatch size')
@@ -436,7 +464,7 @@ if __name__ == '__main__':
     parser.add_argument('--num-sgd-iter', type=int, default=20, help='The number of sgd iterations per training step')
     parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[1e-2, 5e-2],
                         help='The weight to the entropy coefficient in the loss function')
-    parser.add_argument('--entropy-coeff-decay', type=int, default=650,
+    parser.add_argument('--entropy-coeff-decay', type=int, default=90,
                         help='The number of training iterations to decay the entropy coefficient')
     parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
     parser.add_argument('--lambda', type=float, default=.1, help='The eligibility trace')
@@ -454,7 +482,7 @@ if __name__ == '__main__':
 
     # miscellaneous
     parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
-    parser.add_argument('--max-iterations', type=int, default=700, help='The maximum number of training iterations')
+    parser.add_argument('--max-iterations', type=int, default=100, help='The maximum number of training iterations')
 
     # debugging
     parser.add_argument('--debugging', action='store_true', help='Run locally with simplified settings')
