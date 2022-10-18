@@ -92,7 +92,8 @@ if __name__ == '__main__':
 
     head_env = environment.Environment(name='take6-env')
     head_env.environment_variables['AZUREML_COMPUTE_USE_COMMON_RUNTIME'] = False
-    head_env.docker.base_image = '{}.azurecr.io/take6:latest'.format(registry)
+    head_env.docker.base_image = '{}.azurecr.io/take6{}:latest'.format(
+        registry, '-gpu' if head.find('gpu') >= 0 else '')
     head_env.python.user_managed_dependencies = True
     shm_size = cluster['shm-size']
 
