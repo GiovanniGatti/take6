@@ -29,8 +29,6 @@ from take6.aztools import checkpoint
 
 _, tf, _ = try_import_tf()
 
-POLICY_BUFFER_SIZE = 5
-
 
 def t_or_f(arg):
     ua = str(arg).upper()
@@ -45,19 +43,7 @@ def t_or_f(arg):
 def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
     if agent_id == 0:
         return 'learner'
-    _current_policies = list(worker.policy_map.keys())
-    _policy_ids = [int(p.replace('opponent_v', ''))
-                   for p in _current_policies if p
-                   not in ('learner', 'random')
-                   and not p.startswith('random_')
-                   and not p.endswith('_t')]
-
-    # keep only latest POLICY_BUFFER_SIZE policies
-    _policies_to_sample = ['opponent_v{}'.format(i) for i in sorted(_policy_ids)[-POLICY_BUFFER_SIZE:]]
-    _policies_to_sample.append('random')
-    _policies_to_sample += [p for p in _current_policies if p.endswith('_t')]
-
-    return random.choice(_policies_to_sample)
+    return 'opponent'
 
 
 class TrackingCallback(callbacks.DefaultCallbacks):
@@ -142,6 +128,15 @@ class TrackingCallback(callbacks.DefaultCallbacks):
 
 class SelfPlayCallback(callbacks.DefaultCallbacks):
 
+    def on_algorithm_init(self, algorithm: algorithm.Algorithm, **kwargs) -> None:
+        env_config = algorithm.config['env_config']
+        num_players: Optional[int] = env_config['num-players']
+        # Expected score in a balanced game
+        if num_players:
+            self._target_score = .95 * (1 / num_players)
+        else:
+            self._target_score = .95 * np.mean(1 / np.arange(11)[2:])
+
     def on_episode_end(self, *,
                        worker: rllib.RolloutWorker,
                        base_env: rllib.BaseEnv,
@@ -184,70 +179,37 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
         current_policies = list(trainer.workers.local_worker().policy_map.keys())
-        trained_policies = [p for p in current_policies if p
-                            not in ('learner', 'random') and not p.startswith('random_')]
+        tournament_policies = [p for p in current_policies if p not in ('learner', 'opponent', 'random')]
+        league_size = len(tournament_policies)
 
-        if trainer.iteration > 0 and trainer.iteration % 2 == 0 and namespace.self_play:
-            latest_opponent = max(int(_id.replace('opponent_v', '').replace('_t', '')) for _id in trained_policies) \
-                if trained_policies else 0
+        if trainer.iteration > 0 and result['relative_score'] < self._target_score and namespace.self_play:
+            latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in tournament_policies) \
+                if tournament_policies else 0
             new_pol_id = f'opponent_v{latest_opponent + 1}'
-            new_pol_id += '_t' if trainer.iteration % 10 == 0 else ''
-            current_policies.append(new_pol_id)
-            trained_policies.append(new_pol_id)
             new_policy = trainer.add_policy(
                 policy_id=new_pol_id,
                 policy_cls=type(trainer.get_policy('learner')),
             )
             main_state = trainer.get_policy('learner').get_state()
             new_policy.set_state(main_state)
+
+            trainer.get_policy('opponent').set_state(main_state)
+
             trainer.workers.sync_weights()
 
-            # storing at least 1 policy more than needed otherwise
-            # RLLib may fail to find policy when rolling out already existing episodes
-            tmp_policies = [p for p in trained_policies if not p.endswith('_t')]
-            if len(tmp_policies) > POLICY_BUFFER_SIZE + 1:
-                _ids = [int(_id.replace('opponent_v', '')) for _id in tmp_policies]
-                to_remove = ['opponent_v{}'.format(_id) for _id in sorted(_ids)[:-(POLICY_BUFFER_SIZE + 1)]]
-                for policy_id in to_remove:
-                    trainer.remove_policy(policy_id)
-                    current_policies.remove(policy_id)
+            league_size += 1
 
-        result['league_size'] = len(trained_policies)
+        result['league_size'] = league_size
 
 
 def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
     if not hasattr(_algorithm, 'ratings'):
         # see https://trueskill.info/help.html
-        trueskill.setup(mu=25., sigma=25. / 3, beta=20.8, tau=25. / 100, draw_probability=0.18)
+        trueskill.setup(mu=25., sigma=25. / 3, beta=20.8, tau=25. / 100, draw_probability=.5)
         _algorithm.ratings = defaultdict(lambda: trueskill.Rating())
 
     def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
-        if agent_id == 0:
-            # Differently than during training, we don't want to "repeat"
-            # policies during episodes (so to correctly compute MMR).
-            # Unfortunately, I haven't found anyway to know which policies were
-            # already selected between two calls of this function.
-            # The workaround I found was to store this temporary
-            # information in the user_data section of the episode.
-            episode.user_data['selected_policies_id'] = []
-
-            _current_policies = list(worker.policy_map.keys())
-            tournament_policies = [p for p in _current_policies if p.endswith('_t')]
-            _policies_to_sample = ['learner', ]
-            _policies_to_sample += [p for p in sorted(tournament_policies,
-                                                      key=lambda k: int(k.replace('opponent_v', '').replace('_t', '')),
-                                                      reverse=True)]
-            _policies_to_sample += ['random', ]
-            _policies_to_sample += ['random_{}'.format(i) for i in range(10 - len(_policies_to_sample))]
-
-            # higher chance of selecting most recent policies
-            probs = np.arange(len(_policies_to_sample)) / 3.5
-            probs = np.exp(-probs) / np.sum(np.exp(-probs))
-
-            episode.user_data['selected_policies_id'] = np.random.choice(
-                _policies_to_sample, size=10, replace=False, p=probs)
-
-        return episode.user_data['selected_policies_id'][agent_id]
+        return random.choice(list(filter(lambda p: p != 'opponent', worker.policy_map.keys())))
 
     eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
 
@@ -262,14 +224,25 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 
     ties = 0
     for episode in episodes:
-        ratings = []
         scores = []
         players = []
 
         for idx, t in episode.agent_rewards.keys():
-            ratings.append((_algorithm.ratings[t],))
             scores.append(episode.hist_data['true_score'][idx])
             players.append(t)
+
+        suffixed_players = list(players)
+        u_players, counts = np.unique(players, return_counts=True)
+        for prefix, n in zip(u_players[counts > 1], counts[counts > 1]):
+            # need to suffix duplicates
+            idx = 0
+            for i in range(n - 1):
+                idx = players.index(prefix, idx)
+                player_id = prefix + '_{}'.format(i)
+                suffixed_players[idx] = player_id
+                idx += 1
+
+        ratings = [(_algorithm.ratings[p],) for p in suffixed_players]
 
         num_players = len(players)
         classification = np.zeros(num_players, dtype=int)
@@ -280,10 +253,10 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
             classification[scores == _s] = np.min(classification[scores == _s])
         new_ratings = trueskill.rate(ratings, ranks=list(classification))
 
-        assert np.unique(players).shape[0] == num_players, \
+        assert np.unique(suffixed_players).shape[0] == num_players, \
             'Repeated versions of a policy are playing within the same match'
 
-        for i, p in enumerate(players):
+        for i, p in enumerate(suffixed_players):
             (_algorithm.ratings[p],) = new_ratings[i]
 
     metrics = summarize_episodes(episodes, keep_custom_metrics=True)
@@ -302,7 +275,7 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.ExperimentAnalysis:
     num_gpus = len(tf.config.list_physical_devices('GPU'))
     num_cpus = multiprocessing.cpu_count()
-    eval_workers = 2
+    eval_workers = 1
 
     if _namespace.debugging:
         num_workers = 1
@@ -320,7 +293,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         num_sgd_iter = _namespace.num_sgd_iter
         framework = 'tf'
         local_dir = './logs/ray-results'
-        evaluation_duration = 250
+        evaluation_duration = 16
 
     train_batch_size = num_workers * num_envs_per_worker * 10
 
@@ -348,19 +321,6 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     else:
         raise ValueError('Expected 1 (constant) or 2 (initial and final) values for'
                          ' the entropy coefficient hyperparamter, but found {}'.format(_namespace.entropy_coeff))
-
-    policies = {
-        # Our main policy, we'd like to optimize.
-        'learner': PolicySpec(None, None, None, None),
-        # warmup policy
-        'random': PolicySpec(policy.RandomPolicy, None, None, {})
-    }
-
-    for i in range(10):
-        # Add 10 more random policies. This is only useful for
-        # during policy evaluation (to avoid repetition of the
-        # random policy in the rankings)
-        policies['random_{}'.format(i)] = PolicySpec(policy.RandomPolicy, None, None, {})
 
     return tune.run(
         run_or_experiment=ppo.TimedPPO,
@@ -395,7 +355,14 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'lambda': vars(_namespace)['lambda'],
 
             'multiagent': {
-                'policies': policies,
+                'policies': {
+                    # Our main policy, we'd like to optimize.
+                    'learner': PolicySpec(None, None, None, None),
+                    # mirrored policy for training
+                    'opponent': PolicySpec(None, None, None, {}),
+                    # ref policy
+                    'random': PolicySpec(policy.RandomPolicy, None, None, {})
+                },
                 'policy_mapping_fn': policy_mapping_fn,
                 'policies_to_train': ['learner'],
             },
@@ -420,7 +387,9 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'train_batch_size': train_batch_size,
             'sgd_minibatch_size': sgd_minibatch_size,
             'num_sgd_iter': num_sgd_iter,
-            'vf_clip_param': .3,
+            'vf_clip_param': .2,
+            'clip_param': .1,
+            'kl_target': 1e-2,
 
             # Policy evaluation config
             'evaluation_interval': 1,
@@ -462,13 +431,13 @@ if __name__ == '__main__':
     parser.add_argument('--minibatch-size', type=int, default=1024, help='The sgd minibatch size')
     parser.add_argument('--batch-size', type=int, default=307_200, help='The sgd minibatch size')
     parser.add_argument('--num-sgd-iter', type=int, default=20, help='The number of sgd iterations per training step')
-    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[1e-2, 5e-2],
+    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[5e-3, ],
                         help='The weight to the entropy coefficient in the loss function')
     parser.add_argument('--entropy-coeff-decay', type=int, default=90,
                         help='The number of training iterations to decay the entropy coefficient')
     parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
     parser.add_argument('--lambda', type=float, default=.1, help='The eligibility trace')
-    parser.add_argument('--lr', type=float, default=1e-6, help='The learning rate')
+    parser.add_argument('--lr', type=float, default=7e-5, help='The learning rate')
     parser.add_argument('--rwd-fn', type=str, default='proportional-score',
                         choices=['raw-score', 'proportional-score', 'classification'],
                         help='The reward signal to use')
