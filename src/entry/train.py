@@ -214,14 +214,10 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
 
     assert _algorithm.config['evaluation_duration_unit'] == 'episodes'
-    num_episodes = _algorithm.config['evaluation_duration']
-    num_workers = len(eval_workers.remote_workers())
 
-    for _ in range(max(1, round(num_episodes / num_workers))):
-        ray.get([w.sample.remote() for w in eval_workers.remote_workers()])
+    eval_workers.foreach_worker(lambda w: w.sample())
 
-    episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers(), timeout_seconds=99999)
-
+    episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers())
     ties = 0
     for episode in episodes:
         scores = []
@@ -275,25 +271,21 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.ExperimentAnalysis:
     num_gpus = len(tf.config.list_physical_devices('GPU'))
     num_cpus = multiprocessing.cpu_count()
-    eval_workers = 1
 
     if _namespace.debugging:
         num_workers = 1
         num_envs_per_worker = 1
         sgd_minibatch_size = 10
         num_sgd_iter = 3
-        eval_workers = 1
         framework = 'tf2'
         local_dir = str(pathlib.Path(_tmp_dir, 'ray-results'))
-        evaluation_duration = 8
     else:
-        num_workers = num_cpus - eval_workers - 1
+        num_workers = num_cpus - 2
         num_envs_per_worker = int(math.ceil(_namespace.batch_size / (num_workers * 10)))
         sgd_minibatch_size = _namespace.minibatch_size
         num_sgd_iter = _namespace.num_sgd_iter
         framework = 'tf'
         local_dir = './logs/ray-results'
-        evaluation_duration = 16
 
     train_batch_size = num_workers * num_envs_per_worker * 10
 
@@ -394,8 +386,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             # Policy evaluation config
             'evaluation_interval': 1,
             'custom_eval_function': tournament,
-            'evaluation_num_workers': eval_workers,
-            'evaluation_duration': evaluation_duration,
+            'evaluation_num_workers': 1,  # produces 1 x num_envs_per_worker episodes
             'evaluation_duration_unit': 'episodes',
 
             '_disable_preprocessor_api': True,
