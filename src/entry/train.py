@@ -215,7 +215,13 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 
     assert _algorithm.config['evaluation_duration_unit'] == 'episodes'
 
-    eval_workers.foreach_worker(lambda w: w.sample())
+    evaluation_duration = _algorithm.config['evaluation_duration']
+    total_ep = 0
+    while True:
+        batches = eval_workers.foreach_worker(lambda w: w.sample())
+        total_ep += sum(b.env_steps() / 10 for b in batches)
+        if total_ep >= evaluation_duration:
+            break
 
     episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers())
     ties = 0
@@ -273,17 +279,21 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     num_cpus = multiprocessing.cpu_count()
 
     if _namespace.debugging:
+        num_eval_workers = 1
         num_workers = 1
         num_envs_per_worker = 1
         sgd_minibatch_size = 10
         num_sgd_iter = 3
         framework = 'tf2'
+        evaluation_duration = 10
         local_dir = str(pathlib.Path(_tmp_dir, 'ray-results'))
     else:
-        num_workers = num_cpus - 2
+        num_eval_workers = 1  # produces 1 x num_envs_per_worker episodes
+        num_workers = num_cpus - num_eval_workers - 1
         num_envs_per_worker = int(math.ceil(_namespace.batch_size / (num_workers * 10)))
         sgd_minibatch_size = _namespace.minibatch_size
         num_sgd_iter = _namespace.num_sgd_iter
+        evaluation_duration = 1000  # approximate number of tournament matches
         framework = 'tf'
         local_dir = './logs/ray-results'
 
@@ -384,9 +394,10 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'kl_target': 1e-2,
 
             # Policy evaluation config
-            'evaluation_interval': 1,
+            'evaluation_interval': 5,
             'custom_eval_function': tournament,
-            'evaluation_num_workers': 1,  # produces 1 x num_envs_per_worker episodes
+            'evaluation_num_workers': num_eval_workers,
+            'evaluation_duration': evaluation_duration,
             'evaluation_duration_unit': 'episodes',
 
             '_disable_preprocessor_api': True,
