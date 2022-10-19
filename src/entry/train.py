@@ -43,7 +43,10 @@ def t_or_f(arg):
 def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
     if agent_id == 0:
         return 'learner'
-    return 'opponent'
+    policies_to_sample = list(sorted(filter(lambda k: k not in ('learner', 'random'), worker.policy_map.keys()),
+                                     key=lambda k: int(k.replace('opponent_v', '')), reverse=True))
+    policies_to_sample = policies_to_sample[:POLICY_BUFFER_SIZE]
+    return random.choice(policies_to_sample)
 
 
 class TrackingCallback(callbacks.DefaultCallbacks):
@@ -128,14 +131,25 @@ class TrackingCallback(callbacks.DefaultCallbacks):
 
 class SelfPlayCallback(callbacks.DefaultCallbacks):
 
+    # noinspection PyAttributeOutsideInit
     def on_algorithm_init(self, algorithm: algorithm.Algorithm, **kwargs) -> None:
         env_config = algorithm.config['env_config']
         num_players: Optional[int] = env_config['num-players']
         # Expected score in a balanced game
         if num_players:
-            self._target_score = .95 * (1 / num_players)
+            _expected_score = 1 / num_players
         else:
-            self._target_score = .95 * np.mean(1 / np.arange(11)[2:])
+            _expected_score = np.mean(1 / np.arange(11)[2:])
+
+        # Adjust target as league_size increases
+        decay_rate = .95
+        def adaptative_target(league_size: int) -> float:
+            if league_size <= 1:
+                return decay_rate * _expected_score
+            return decay_rate * ((league_size - 1) / league_size * adaptative_target(league_size - 1)
+                                 + 1 / league_size * _expected_score)
+
+        self._adaptative_target_fn = adaptative_target
 
     def on_episode_end(self, *,
                        worker: rllib.RolloutWorker,
@@ -179,10 +193,11 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
         current_policies = list(trainer.workers.local_worker().policy_map.keys())
-        tournament_policies = [p for p in current_policies if p not in ('learner', 'opponent', 'random')]
+        tournament_policies = [p for p in current_policies if p not in ('learner', 'random')]
         league_size = len(tournament_policies)
 
-        if trainer.iteration > 0 and result['relative_score'] < self._target_score and namespace.self_play:
+        target_score = self._adaptative_target_fn(min(league_size, POLICY_BUFFER_SIZE))
+        if namespace.self_play and result['relative_score'] < target_score:
             latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in tournament_policies) \
                 if tournament_policies else 0
             new_pol_id = f'opponent_v{latest_opponent + 1}'
@@ -192,8 +207,6 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
             )
             main_state = trainer.get_policy('learner').get_state()
             new_policy.set_state(main_state)
-
-            trainer.get_policy('opponent').set_state(main_state)
 
             trainer.workers.sync_weights()
 
@@ -209,7 +222,7 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         _algorithm.ratings = defaultdict(lambda: trueskill.Rating())
 
     def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
-        return random.choice(list(filter(lambda p: p != 'opponent', worker.policy_map.keys())))
+        return random.choice(list(worker.policy_map.keys()))
 
     eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
 
@@ -361,7 +374,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
                     # Our main policy, we'd like to optimize.
                     'learner': PolicySpec(None, None, None, None),
                     # mirrored policy for training
-                    'opponent': PolicySpec(None, None, None, {}),
+                    'opponent_v0': PolicySpec(None, None, None, {}),
                     # ref policy
                     'random': PolicySpec(policy.RandomPolicy, None, None, {})
                 },
@@ -448,7 +461,7 @@ if __name__ == '__main__':
                         help='Add history of played cards to agent\'s observations')
     parser.add_argument('--self-play', action='store_true', help='Train the agent through self-play')
 
-    parser.add_argument('--policy-buffer-size', type=int,
+    parser.add_argument('--policy-buffer-size', type=int, default=5,
                         help='The number of historical policies to use during self-play')
 
     # miscellaneous
