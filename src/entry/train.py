@@ -484,8 +484,7 @@ if __name__ == '__main__':
 
     ray.init(local_mode=namespace.debugging)
 
-    if namespace.policy_buffer_size:
-        POLICY_BUFFER_SIZE = namespace.policy_buffer_size
+    POLICY_BUFFER_SIZE = namespace.policy_buffer_size
 
     tmp_dir = tempfile.mkdtemp()
     main(namespace, tmp_dir)
