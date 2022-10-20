@@ -38,7 +38,8 @@ def t_or_f(arg):
     elif 'FALSE'.startswith(ua):
         return False
     else:
-        pass  # error condition maybe?
+        raise argparse.ArgumentTypeError(
+            f'Expecting either true or false, but found {arg}. If you want None, simply don\'t specify the parameter.')
 
 
 def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
@@ -240,7 +241,7 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     relative_scores = weightstats.DescrStatsW(result['custom_metrics']['relative_score'])
     relative_score = max(relative_scores.tconfint_mean(alpha=0.05))
 
-    if namespace.self_play and relative_score < target_score:
+    if namespace.with_self_play and relative_score < target_score:
         latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in tournament_policies) \
             if tournament_policies else 0
         new_pol_id = f'opponent_v{latest_opponent + 1}'
@@ -480,10 +481,23 @@ if __name__ == '__main__':
     parser.add_argument('--rwd-fn', type=str, default='proportional-score',
                         choices=['raw-score', 'proportional-score', 'classification'],
                         help='The reward signal to use')
-    parser.add_argument('--with-scores', action='store_true', help='Add scores to agent\'s observations')
-    parser.add_argument('--with-history', action='store_true',
-                        help='Add history of played cards to agent\'s observations')
-    parser.add_argument('--self-play', action='store_true', help='Train the agent through self-play')
+
+    parser.add_argument('--with-scores', dest='with_scores', action='store_true',
+                        help='Append current scores to agent\'s observations')
+    parser.add_argument('--without-scores', dest='with_scores', action='store_false',
+                        help='Remove scores from agent\'s observations')
+    parser.set_defaults(with_scores=True)
+
+    parser.add_argument('--with-history', dest='with_history', action='store_true',
+                        help='Append history of played cards tp agent\'s observations')
+    parser.add_argument('--without-history', dest='with_history', action='store_false',
+                        help='Remove history of played cards from agent\'s observations')
+    parser.set_defaults(with_history=True)
+
+    parser.add_argument('--with-self-play', dest='with_self_play', action='store_true', help='Train by self-play')
+    parser.add_argument('--without-self-play', dest='with_self_play', action='store_false',
+                        help='Use only random initialized policies to train the agent')
+    parser.set_defaults(with_self_play=True)
 
     parser.add_argument('--policy-buffer-size', type=int, default=5,
                         help='The number of historical policies to use during self-play')
