@@ -23,6 +23,7 @@ from ray.rllib.utils.framework import try_import_tf
 from ray.rllib.utils.typing import Dict
 from ray.tune.analysis import experiment_analysis
 from ray.tune.utils import log
+from statsmodels.stats import weightstats
 
 from take6 import env, model, policy, ppo
 from take6.aztools import checkpoint
@@ -107,6 +108,8 @@ class TrackingCallback(callbacks.DefaultCallbacks):
                      value=result['evaluation']['custom_metrics']['eval_weighted_classification'])
             _run.log(name='eval/win_rate', value=result['evaluation']['custom_metrics']['eval_win_rate'])
             _run.log(name='eval/ties_rate', value=result['evaluation']['custom_metrics']['eval_ties'])
+            _run.log(name='eval/relative_score_to_most_recent_policy',
+                     value=result['evaluation']['custom_metrics']['relative_score_to_most_recent_policy'])
 
             ratings = result['evaluation']['custom_metrics']['trueskill']
 
@@ -129,27 +132,7 @@ class TrackingCallback(callbacks.DefaultCallbacks):
             _run.log(name='eval/relative_mmr', value=_learner_mmr - _opponent_mmr)
 
 
-class SelfPlayCallback(callbacks.DefaultCallbacks):
-
-    # noinspection PyAttributeOutsideInit
-    def on_algorithm_init(self, algorithm: algorithm.Algorithm, **kwargs) -> None:
-        env_config = algorithm.config['env_config']
-        num_players: Optional[int] = env_config['num-players']
-        # Expected score in a balanced game
-        if num_players:
-            _expected_score = 1 / num_players
-        else:
-            _expected_score = np.mean(1 / np.arange(11)[2:])
-
-        # Adjust target as league_size increases
-        decay_rate = .95
-        def adaptative_target(league_size: int) -> float:
-            if league_size <= 1:
-                return decay_rate * _expected_score
-            return decay_rate * ((league_size - 1) / league_size * adaptative_target(league_size - 1)
-                                 + 1 / league_size * _expected_score)
-
-        self._adaptative_target_fn = adaptative_target
+class CustomizedMetricsCallback(callbacks.DefaultCallbacks):
 
     def on_episode_end(self, *,
                        worker: rllib.RolloutWorker,
@@ -193,26 +176,7 @@ class SelfPlayCallback(callbacks.DefaultCallbacks):
         result['weighted_classification'] = result['custom_metrics']['weighted_classification_mean']
 
         current_policies = list(trainer.workers.local_worker().policy_map.keys())
-        tournament_policies = [p for p in current_policies if p not in ('learner', 'random')]
-        league_size = len(tournament_policies)
-
-        target_score = self._adaptative_target_fn(min(league_size, POLICY_BUFFER_SIZE))
-        if namespace.self_play and result['relative_score'] < target_score:
-            latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in tournament_policies) \
-                if tournament_policies else 0
-            new_pol_id = f'opponent_v{latest_opponent + 1}'
-            new_policy = trainer.add_policy(
-                policy_id=new_pol_id,
-                policy_cls=type(trainer.get_policy('learner')),
-            )
-            main_state = trainer.get_policy('learner').get_state()
-            new_policy.set_state(main_state)
-
-            trainer.workers.sync_weights()
-
-            league_size += 1
-
-        result['league_size'] = league_size
+        result['league_size'] = len(current_policies) - 2
 
 
 def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerSet) -> Dict[Any, Any]:
@@ -221,22 +185,78 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         trueskill.setup(mu=25., sigma=25. / 3, beta=20.8, tau=25. / 100, draw_probability=.5)
         _algorithm.ratings = defaultdict(lambda: trueskill.Rating())
 
-    def eval_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
-        return random.choice(list(worker.policy_map.keys()))
-
-    eval_workers.foreach_worker(lambda w: w.set_policy_mapping_fn(eval_policy_mapping_fn))
-
     assert _algorithm.config['evaluation_duration_unit'] == 'episodes'
+
+    worker_m, workers_mmr = eval_workers.remote_workers()[0], eval_workers.remote_workers()[1:]
+
+    def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
+        if agent_id == 0:
+            return 'learner'
+        return next(iter(sorted(filter(lambda k: k not in ('learner', 'random'), worker.policy_map.keys()),
+                                key=lambda k: int(k.replace('opponent_v', '')), reverse=True)))
+
+    ray.get([worker_m.apply.remote(lambda w: w.set_policy_mapping_fn(policy_mapping_fn))])
+
+    # metrics becomes more and more noisy as the number of policies in the pool grows
+    # for this reason, we are limiting the number of policies available for evaluation
+    # at each training iteration
+    selected_policies = list(filter(lambda k: k not in ('learner', 'random'),
+                                    _algorithm.workers.local_worker().policy_map.keys()))
+    selected_policies = list(np.random.choice(selected_policies, size=min(8, len(selected_policies)), replace=False))
+    selected_policies.extend(('learner', 'random'))
+
+    def mmr_policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
+        return random.choice(selected_policies)
+
+    for w in workers_mmr:
+        ray.get([w.apply.remote(lambda _w: _w.set_policy_mapping_fn(mmr_policy_mapping_fn))])
 
     evaluation_duration = _algorithm.config['evaluation_duration']
     total_ep = 0
     while True:
-        batches = eval_workers.foreach_worker(lambda w: w.sample())
-        total_ep += sum(b.env_steps() / 10 for b in batches)
+        batch = eval_workers.foreach_worker(lambda w: w.sample())
+        total_ep += batch[0].env_steps() / 10
         if total_ep >= evaluation_duration:
             break
 
-    episodes, _ = collect_episodes(remote_workers=eval_workers.remote_workers())
+    #
+    # Deciding whether to save the current learner's policy in pool of tournament policies
+    #
+    episodes, _ = collect_episodes(remote_workers=[worker_m])
+    result = summarize_episodes(episodes, keep_custom_metrics=True)
+
+    env_config = _algorithm.config['env_config']
+    num_players: Optional[int] = env_config['num-players']
+    # Expected score in a balanced game
+    if num_players:
+        target_score = 0.95 * (1 / num_players)
+    else:
+        target_score = 0.95 * np.mean(1 / np.arange(11)[2:])
+
+    current_policies = list(_algorithm.workers.local_worker().policy_map.keys())
+    tournament_policies = [p for p in current_policies if p not in ('learner', 'random')]
+
+    # taking a conservative measure of performance
+    relative_scores = weightstats.DescrStatsW(result['custom_metrics']['relative_score'])
+    relative_score = max(relative_scores.tconfint_mean(alpha=0.05))
+
+    if namespace.self_play and relative_score < target_score:
+        latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in tournament_policies) \
+            if tournament_policies else 0
+        new_pol_id = f'opponent_v{latest_opponent + 1}'
+        new_policy = _algorithm.add_policy(
+            policy_id=new_pol_id,
+            policy_cls=type(_algorithm.get_policy('learner')),
+        )
+        main_state = _algorithm.get_policy('learner').get_state()
+        new_policy.set_state(main_state)
+
+        _algorithm.workers.sync_weights()
+
+    #
+    # Computing MMR
+    #
+    episodes, _ = collect_episodes(remote_workers=workers_mmr)
     ties = 0
     for episode in episodes:
         scores = []
@@ -284,6 +304,8 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     custom_metrics['eval_weighted_classification'] = np.mean(custom_metrics['weighted_classification'])
     custom_metrics['eval_ties'] = ties / len(episodes)
 
+    custom_metrics['relative_score_to_most_recent_policy'] = relative_score
+
     return metrics
 
 
@@ -291,8 +313,11 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     num_gpus = len(tf.config.list_physical_devices('GPU'))
     num_cpus = multiprocessing.cpu_count()
 
+    # 1 worker dedicated to learner evaluation and
+    # 1 produces that produces num_envs_per_worker episodes for mmr computation
+    num_eval_workers = 2
+
     if _namespace.debugging:
-        num_eval_workers = 1
         num_workers = 1
         num_envs_per_worker = 1
         sgd_minibatch_size = 10
@@ -301,12 +326,11 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         evaluation_duration = 10
         local_dir = str(pathlib.Path(_tmp_dir, 'ray-results'))
     else:
-        num_eval_workers = 1  # produces 1 x num_envs_per_worker episodes
         num_workers = num_cpus - num_eval_workers - 1
         num_envs_per_worker = int(math.ceil(_namespace.batch_size / (num_workers * 10)))
         sgd_minibatch_size = _namespace.minibatch_size
         num_sgd_iter = _namespace.num_sgd_iter
-        evaluation_duration = 1000  # approximate number of tournament matches
+        evaluation_duration = 3000  # approximate number of tournament matches
         framework = 'tf'
         local_dir = './logs/ray-results'
 
@@ -407,7 +431,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'kl_target': 1e-2,
 
             # Policy evaluation config
-            'evaluation_interval': 5,
+            'evaluation_interval': 1,
             'custom_eval_function': tournament,
             'evaluation_num_workers': num_eval_workers,
             'evaluation_duration': evaluation_duration,
@@ -415,7 +439,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
 
             '_disable_preprocessor_api': True,
 
-            'callbacks': callbacks.MultiCallbacks([SelfPlayCallback, TrackingCallback]),
+            'callbacks': callbacks.MultiCallbacks([CustomizedMetricsCallback, TrackingCallback]),
         },
         restore=_checkpoint,
         checkpoint_freq=1,
