@@ -380,7 +380,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'framework': framework,
 
             'model': {
-                'fcnet_hiddens': [256, 256, 128, 64],
+                'fcnet_hiddens': [256, 256, 256],
                 'custom_model': 'take6',
                 'fcnet_activation': 'relu',
             },
@@ -470,9 +470,9 @@ if __name__ == '__main__':
     parser.add_argument('--minibatch-size', type=int, default=1024, help='The sgd minibatch size')
     parser.add_argument('--batch-size', type=int, default=307_200, help='The sgd minibatch size')
     parser.add_argument('--num-sgd-iter', type=int, default=20, help='The number of sgd iterations per training step')
-    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[5e-3, ],
+    parser.add_argument('--entropy-coeff', type=float, nargs='*', default=[1e-3, 3e-2],
                         help='The weight to the entropy coefficient in the loss function')
-    parser.add_argument('--entropy-coeff-decay', type=int, default=90,
+    parser.add_argument('--entropy-coeff-decay', type=int, default=350,
                         help='The number of training iterations to decay the entropy coefficient')
     parser.add_argument('--gamma', type=float, default=1., help='The discount rate')
     parser.add_argument('--lambda', type=float, default=.1, help='The eligibility trace')
@@ -489,8 +489,8 @@ if __name__ == '__main__':
                         help='The number of historical policies to use during self-play')
 
     # miscellaneous
-    parser.add_argument('--stop', type=float, default=.05, help='The policy entropy value which training stops')
-    parser.add_argument('--max-iterations', type=int, default=100, help='The maximum number of training iterations')
+    parser.add_argument('--stop', type=float, default=.18, help='The policy entropy value which training stops')
+    parser.add_argument('--max-iterations', type=int, default=600, help='The maximum number of training iterations')
 
     # debugging
     parser.add_argument('--debugging', action='store_true', help='Run locally with simplified settings')
