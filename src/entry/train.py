@@ -239,7 +239,7 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 
     # taking a conservative measure of performance
     relative_scores = weightstats.DescrStatsW(result['custom_metrics']['relative_score'])
-    relative_score = max(relative_scores.tconfint_mean(alpha=0.05))
+    relative_score = max(relative_scores.tconfint_mean(alpha=0.02))
 
     if namespace.with_self_play and relative_score < target_score:
         latest_opponent = max(int(_id.replace('opponent_v', '')) for _id in tournament_policies) \
