@@ -45,6 +45,9 @@ class TimedPPO(ppo.PPO):
         if hasattr(self, 'ratings'):
             ratings_file = os.path.join(checkpoint_dir, 'ratings')
             pickle.dump(dict(self.ratings), open(ratings_file, 'wb'))
+        learner_state = self.workers.local_worker().policy_map['learner'].get_state()
+        learner_state_path = os.path.join(checkpoint_dir, f'learner_state-{int(checkpoint_dir[-6:])}')
+        pickle.dump(learner_state, open(learner_state_path, 'wb'))
         return saved
 
     def load_checkpoint(self, checkpoint_path: str) -> None:
