@@ -31,17 +31,6 @@ from take6.aztools import checkpoint
 _, tf, _ = try_import_tf()
 
 
-def t_or_f(arg):
-    ua = str(arg).upper()
-    if 'TRUE'.startswith(ua):
-        return True
-    elif 'FALSE'.startswith(ua):
-        return False
-    else:
-        raise argparse.ArgumentTypeError(
-            f'Expecting either true or false, but found {arg}. If you want None, simply don\'t specify the parameter.')
-
-
 def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
     if agent_id == 0:
         return 'learner'
@@ -369,7 +358,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'env': 'take6',
             'env_config': {
                 'num-players': _namespace.num_players,
-                'expert': _namespace.expert_mode,
+                'expert': True if _namespace.rules == 'expert' else False if _namespace.rules == 'standard' else None,
                 'rwd-fn': _namespace.rwd_fn,
                 'with-scores': _namespace.with_scores,
                 'with-history': _namespace.with_history,
@@ -463,9 +452,9 @@ if __name__ == '__main__':
     parser.add_argument('--num-players', type=int, default=None, help='The number of players in the training env. '
                                                                       'By default, the number of players is arbitrary, '
                                                                       'ranging from 2 to 10 players.')
-    parser.add_argument('--expert-mode', type=t_or_f, default=None,
+    parser.add_argument('--rules', type=str, choices=['standard', 'expert'], default=None,
                         help='Whether env follows expert rules mode or not. '
-                             'By default, rules selected are arbitrarily.')
+                             'By default (unspecified), rules selected are arbitrarily.')
 
     # hyper-parameters
     parser.add_argument('--minibatch-size', type=int, default=1024, help='The sgd minibatch size')
