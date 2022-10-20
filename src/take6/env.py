@@ -15,6 +15,13 @@ class RuleState:
         self._num_players = num_players
         self._expert = expert
 
+    @classmethod
+    def enc_space(cls) -> spaces.Space:
+        return spaces.Box(low=0., high=1., shape=(1,), dtype=np.float32)
+
+    def encode(self) -> np.ndarray:
+        return np.array([self._expert], dtype=np.float32)
+
     @property
     def num_players(self) -> int:
         return self._num_players
@@ -437,8 +444,7 @@ class RuleWrapper(GroupedActionMultiEnv):
         self.observation_space = _env.observation_space
         self.action_space = _env.action_space
 
-        self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'],
-                                                           spaces.Box(low=0., high=1., shape=(1,), dtype=np.float32)))
+        self.observation_space['real_obs'] = spaces.Tuple((*self.observation_space['real_obs'], RuleState.enc_space()))
 
     def step(
             self, action_dict: MultiAgentDict) -> Tuple[MultiAgentDict, MultiAgentDict, MultiAgentDict, MultiAgentDict]:
@@ -452,7 +458,7 @@ class RuleWrapper(GroupedActionMultiEnv):
 
     def observation(self, obs: MultiAgentDict) -> MultiAgentDict:
         for _obs in obs.values():
-            _obs['real_obs'] = (*_obs['real_obs'], np.array([self._rule_state.expert], dtype=np.float32))
+            _obs['real_obs'] = (*_obs['real_obs'], self._rule_state.encode())
         return obs
 
 
