@@ -177,7 +177,9 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
 
     assert _algorithm.config['evaluation_duration_unit'] == 'episodes'
 
-    worker_m, workers_mmr = eval_workers.remote_workers()[0], eval_workers.remote_workers()[1:]
+    all_workers = eval_workers.remote_workers()
+    assert len(all_workers) >= 2, f'Expected at least two evaluation workers, but found {len(all_workers)}'
+    workers_mmr, workers_m = all_workers[::2], all_workers[1::2]
 
     def policy_mapping_fn(agent_id, episode, worker, **kwargs) -> str:
         if agent_id == 0:
@@ -185,7 +187,8 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
         return next(iter(sorted(filter(lambda k: k not in ('learner', 'random'), worker.policy_map.keys()),
                                 key=lambda k: int(k.replace('opponent_v', '')), reverse=True)))
 
-    ray.get([worker_m.apply.remote(lambda w: w.set_policy_mapping_fn(policy_mapping_fn))])
+    for w in workers_m:
+        ray.get([w.apply.remote(lambda _w: _w.set_policy_mapping_fn(policy_mapping_fn))])
 
     # metrics becomes more and more noisy as the number of policies in the pool grows
     # for this reason, we are limiting the number of policies available for evaluation
@@ -212,7 +215,7 @@ def tournament(_algorithm: algorithm.Algorithm, eval_workers: worker_set.WorkerS
     #
     # Deciding whether to save the current learner's policy in pool of tournament policies
     #
-    episodes, _ = collect_episodes(remote_workers=[worker_m])
+    episodes, _ = collect_episodes(remote_workers=workers_m)
     result = summarize_episodes(episodes, keep_custom_metrics=True)
 
     env_config = _algorithm.config['env_config']
@@ -303,11 +306,12 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     num_gpus = len(tf.config.list_physical_devices('GPU'))
     num_cpus = multiprocessing.cpu_count()
 
-    # 1 worker dedicated to learner evaluation and
-    # 1 produces that produces num_envs_per_worker episodes for mmr computation
-    num_eval_workers = 2
+    # 2 worker dedicated to learner evaluation and
+    # 2 produces that produces num_envs_per_worker episodes for mmr computation
+    num_eval_workers = 4
 
     if _namespace.debugging:
+        num_eval_workers = 2
         num_workers = 1
         num_envs_per_worker = 1
         sgd_minibatch_size = 10
@@ -320,7 +324,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
         num_envs_per_worker = int(math.ceil(_namespace.batch_size / (num_workers * 10)))
         sgd_minibatch_size = _namespace.minibatch_size
         num_sgd_iter = _namespace.num_sgd_iter
-        evaluation_duration = 3000  # approximate number of tournament matches
+        evaluation_duration = 1500  # approximate number of tournament matches per evaluation worker
         framework = 'tf'
         local_dir = './logs/ray-results'
 
