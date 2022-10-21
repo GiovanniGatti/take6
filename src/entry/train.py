@@ -518,6 +518,9 @@ if __name__ == '__main__':
     POLICY_BUFFER_SIZE = namespace.policy_buffer_size
 
     tmp_dir = tempfile.mkdtemp()
-    main(namespace, tmp_dir)
+    result = main(namespace, tmp_dir)
+
+    if result.trials[0].status == 'ERROR':
+        sys.exit(1)
 
     sys.exit(0)
