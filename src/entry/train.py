@@ -374,7 +374,7 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
             'framework': framework,
 
             'model': {
-                'fcnet_hiddens': [256, 256, 256],
+                'fcnet_hiddens': _namespace.model,
                 'custom_model': 'take6',
                 'fcnet_activation': 'relu',
             },
@@ -474,6 +474,9 @@ if __name__ == '__main__':
     parser.add_argument('--rwd-fn', type=str, default='proportional-score',
                         choices=['raw-score', 'proportional-score', 'classification'],
                         help='The reward signal to use')
+
+    parser.add_argument('--model', type=int, nargs='*', default=[256, 256, 256],
+                        help='The hidden units of the fully connected ANN')
 
     parser.add_argument('--with-scores', dest='with_scores', action='store_true',
                         help='Append current scores to agent\'s observations')
