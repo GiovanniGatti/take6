@@ -340,7 +340,9 @@ class ProportionalRwd(GroupedActionMultiEnv):
 
         if done[0]:
             scores = self._scoreboard.scores
-            new_rwd = {i: -scores[i] / np.sum(scores) for i in range(self._rule_state.num_players)}
+            scores += .1 * self._rule_state.num_players
+            scores = scores / np.sum(scores)
+            new_rwd = {i: -scores[i] for i in range(self._rule_state.num_players)}
         else:
             new_rwd = {i: 0. for i in range(self._rule_state.num_players)}
 
