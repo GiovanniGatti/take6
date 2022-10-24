@@ -331,9 +331,10 @@ def main(_namespace: argparse.Namespace, _tmp_dir: str) -> experiment_analysis.E
     train_batch_size = num_workers * num_envs_per_worker * 10
 
     _checkpoint = checkpoint.recover_from_preemption(local_dir)
-    if _checkpoint is None and _namespace.checkpoint is not None:
-        checkpoint.retrieve_metrics(_namespace.run_id, _namespace.checkpoint)
-        _checkpoint = checkpoint.load_checkpoint_from(_namespace.run_id, _namespace.checkpoint)
+    if _checkpoint is None:
+        _checkpoint_id = _namespace.checkpoint or checkpoint.get_latest_checkpoint(_namespace.run_id)
+        checkpoint.retrieve_metrics(_namespace.run_id, _checkpoint_id)
+        _checkpoint = checkpoint.load_checkpoint_from(_namespace.run_id, _checkpoint_id)
         print('Using checkpoint file \'{}\' from run-id \'{}\''.format(_checkpoint, _namespace.run_id))
     elif _checkpoint is not None:
         print('Using checkpoint file \'{}\' before preemption'.format(_checkpoint))
@@ -506,10 +507,6 @@ if __name__ == '__main__':
     parser.add_argument('--debugging', action='store_true', help='Run locally with simplified settings')
 
     namespace = parser.parse_args(sys.argv[1:])
-
-    if namespace.run_id or namespace.checkpoint:
-        if not (namespace.run_id and namespace.checkpoint):
-            raise RuntimeError('arguments --run-id and --checkpoint-id both are required for loading checkpoints')
 
     run = core.Run.get_context()
     run.set_tags(vars(namespace))
