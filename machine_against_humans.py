@@ -151,7 +151,7 @@ if __name__ == '__main__':
                 print(f'probs = {np.round(probs, 2)}')
                 print('')
 
-            inp = read_input_cards('Opponents\' cards (clockwise): ', num_expected_cards=1)
+            inp = read_input_cards('Opponents\' cards (clockwise): ', num_expected_cards=num_players - 1)
 
             played_cards = np.concatenate((np.array([played_card]), inp))
             current_scores = table.play(played_cards)
