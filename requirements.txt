@@ -6,4 +6,4 @@ pytest-xdist==2.4.0
 tensorflow==2.4.3
 gym==0.21.0
 trueskill==0.4.5
-inquirer==2.9.1
+inquirer==2.10.0
